@@ -112,12 +112,12 @@ class ReducedCA(torch.nn.Module):
 
 
 class GeneCA(torch.nn.Module):
-    def __init__(self, chn=12, hidden_n=96, gene_size=3, recurrent_gene =3, modulatory_gene=3):
+    def __init__(self, chn=12, hidden_n=96, gene_size=3):
         super().__init__()
         self.chn = chn
         self.gene_size = gene_size 
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
-        GeneCA_layers = chn  - gene_size
+        GeneCA_layers = chn  - gene_size 
         self.w2 = torch.nn.Conv2d(hidden_n, GeneCA_layers, 1, bias=False)
         self.w2.weight.data.zero_()
         self.channels = gene_size + recurrent_gene + modulatory_gene
