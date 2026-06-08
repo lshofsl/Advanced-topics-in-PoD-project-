@@ -118,20 +118,20 @@ class GeneCA(torch.nn.Module):
         self.gene_size = gene_size 
         self.beta = torch.nn.Parameter(torch.zeros(1))
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
-        GeneCA_layers = chn  - gene_size   # GeneNCA update only the RGBA+hidden channels but perceives all the channles except RA and modulatory gene channels
+        self.public = chn  - gene_size  
         self.w2 = torch.nn.Conv2d(hidden_n, GeneCA_layers, 1, bias=False)
         self.w2.weight.data.zero_()
         
 
     def forward(self, x, update_rate=0.5):
         gene = x[:, -self.gene_size:, ...]
-        s = x[:, :self.chn, ...]
-        y = reduced_perception(x[:, :self.chn+ self.gene_size], 0)   #Only perceive the RGBA + hidden + genes 
+        s = x[:, :self.public, ...]
+        y = reduced_perception(x[:, :self.chn], 0)   #Only perceive the RGBA + hidden + genes 
         
         ##NCA state update 
         delta_s = self.w2(torch.relu(self.w1(y)))
         b, c, h, w = y.shape
-        ## Energy function: quadratic Hopfield
+        ## Energy function: quadratic Hopfield form
         energy_grad = -s
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
