@@ -119,7 +119,7 @@ class GeneCA(torch.nn.Module):
         self.beta = torch.nn.Parameter(torch.zeros(1))
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
         self.public = chn  - gene_size  
-        self.w2 = torch.nn.Conv2d(hidden_n, GeneCA_layers, 1, bias=False)
+        self.w2 = torch.nn.Conv2d(hidden_n, self.public, 1, bias=False)
         self.w2.weight.data.zero_()
         
 
