@@ -136,7 +136,7 @@ class GeneCA(torch.nn.Module):
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
         pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0, ).cuda() > 0.1
-        s_update = s + (delta_s * update_mask - beta * energy_grad) * pre_life_mask
+        s_update = s + (delta_s * update_mask - self.beta * energy_grad) * pre_life_mask
         x = torch.cat((s_update, gene), dim=1)
         return x
 
