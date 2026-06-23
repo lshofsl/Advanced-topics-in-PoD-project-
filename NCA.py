@@ -204,7 +204,7 @@ class CRBM(torch.nn.Module):
 class Energy_learnable(torch.nn.Module):
     def __init__(self, chn=12, hidden_n=96, gene_size=3):
         super().__init__()
-        self.chn = chn
+        self.chn = chn #private channels
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
         self.w2 = torch.nn.Conv2d(hidden_n, chn - gene_size, 1, bias=False)
         self.w2.weight.data.zero_()
@@ -217,7 +217,7 @@ class Energy_learnable(torch.nn.Module):
         Returns: scalar energy (accumulated over batch and grid)
         """
         # Get perception for all cells
-        y = reduced_perception(x[:, :self.chn - self.gene_size], 0)
+        y = reduced_perception(x[:, :self.chn], 0)
         
         # Evaluate energy density at each cell via MLP
         energy_density = torch.relu(self.w1(y))  # (B, hidden_n, H, W)
@@ -275,7 +275,6 @@ class Energy_learnable(torch.nn.Module):
             x_current = x_new.detach().requires_grad_(True)
         
         x_out = x_current.detach()
-        
 
         update_mask = (torch.rand(B, 1, H, W, device=x.device) + update_rate).floor()
         xmp = torch.nn.functional.pad(x_out[:, 3:4, ...], pad=[1, 1, 1, 1], mode="circular")
