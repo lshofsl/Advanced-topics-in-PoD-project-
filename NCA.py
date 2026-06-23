@@ -144,7 +144,7 @@ class GeneCA(torch.nn.Module):
 
 
 class CRBM(torch.nn.Module):
-    def __init__(self, v_dim=4, h_dim=12, u_dim=64, gene_size=3, sigma=1.0):
+    def __init__(self, v_dim=4, h_dim=9, u_dim=64, gene_size=3, sigma=1.0):
         super().__init__()
         self.v_dim, self.h_dim, self.u_dim = v_dim, h_dim, u_dim
         self.sigma = sigma
@@ -163,18 +163,23 @@ class CRBM(torch.nn.Module):
         self.B = torch.nn.Conv2d(u_dim, h_dim, 1, bias=False)
         torch.nn.init.normal_(self.A.weight, std=0.01)
         torch.nn.init.normal_(self.B.weight, std=0.01)
+        
+        
+        self.gene_bias_h = torch.nn.Conv2d(gene_size, h_dim, 1)
+        # To drive the morphologies in the energy landscape, we need to be projecting the genes stored in the weights, therefor they energy will not mixup during the training  
+        #self.gene_proj = torch.nn.Conv2d(3, h_dim, 1) 
 
     def forward(self, x, update_rate=0.5):
-        gene = x[:, -self.gene_size:, ...]
-        s = x[:, :self.chn, ...]
-        v = x[:, :self.v_dim, ...]
+        gene = x[:, -self.gene_size:, ...] #Gene channels 
+        s = x[:, :self.chn, ...]  # Public channels (hidden+RGBA)
+        v = x[:, :self.v_dim, ...] #Visible channels (RBGA)
 
         # perception over RGBA+hidden+gene, gene only ever feeds u
         y = reduced_perception(x[:, :self.chn + self.gene_size], 0)
         u = y  
 
         b_eff = self.b + self.A(u)
-        c_eff = self.c + self.B(u)
+        c_eff = self.c + self.B(u) + self.gene_bias_h(gene)
 
         # mean-field hidden (Bernoulli/sigmoid), conv W acts as v->h map
         hidden = torch.sigmoid(self.W(v) / (self.sigma ** 2) + c_eff)
