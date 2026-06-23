@@ -197,3 +197,96 @@ class CRBM(torch.nn.Module):
         s_update = s + (s_new - s) * update_mask * pre_life_mask
         x = torch.cat((s_update, gene), dim=1)
         return x
+        
+        
+#To have a learnable, no explicit energy function, we can work with the same small MLP as the baseline NCA.         
+
+class Energy_learnable(torch.nn.Module):
+    def __init__(self, chn=12, hidden_n=96, gene_size=3):
+        super().__init__()
+        self.chn = chn
+        self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
+        self.w2 = torch.nn.Conv2d(hidden_n, chn - gene_size, 1, bias=False)
+        self.w2.weight.data.zero_()
+        self.gene_size = gene_size
+
+    def compute_energy(self, x):
+        """
+        Compute total energy E_θ(x) = sum_i e_θ(P_i(x))
+        x: (B, C, H, W), requires_grad=True
+        Returns: scalar energy (accumulated over batch and grid)
+        """
+        # Get perception for all cells
+        perception = self.reduced_perception(x)  # (B, C + 3*C, H, W)
+        
+        # Evaluate energy density at each cell via MLP
+        energy_density = torch.relu(self.w1(perception))  # (B, hidden_n, H, W)
+        energy_density = self.w2(energy_density)  # (B, 1, H, W)
+        
+        # Sum over all cells to get total energy
+        energy = energy_density.sum()
+        
+        return energy
+    
+    def forward(self, x, steps=32, eta=0.01, update_rate=0.5, return_trajectory=False):
+        """
+        Energy-gradient NCA update
+        
+        Args:
+            x: (B, C, H, W) state
+            steps: number of gradient descent steps
+            eta: step size for gradient descent
+            update_rate: probability of updating each cell (standard NCA)
+            return_trajectory: if True, return trajectory; else just final state
+        
+        Returns:
+            x_out: (B, C, H, W) updated state
+            (optional) trajectory, energies if return_trajectory=True
+        """
+        B, C, H, W = x.shape
+        
+        # Separate gene channels (static, don't update)
+        gene = x[:, -self.gene_size:, ...]
+        x_dynamic = x[:, :-self.gene_size, ...]
+        
+        trajectory = [x.detach().clone()]
+        energies = []
+        
+        # Gradient descent on energy
+        x_current = x.clone().requires_grad_(True)
+        
+        for t in range(steps):
+            # Compute energy
+            energy = self.compute_energy(x_current)
+            energies.append(energy.item())
+            
+            # Compute gradient ∇_x E
+            grad_x = torch.autograd.grad(
+                energy, x_current,
+                create_graph=False,
+                retain_graph=False)[0]
+            
+            # Update: x ← x - η ∇_x E
+            with torch.no_grad():
+                x_new = x_current - eta * grad_x
+                trajectory.append(x_new.clone())
+            
+            # Reattach for next iteration
+            x_current = x_new.detach().requires_grad_(True)
+        
+        x_out = x_current.detach()
+        
+
+        update_mask = (torch.rand(B, 1, H, W, device=x.device) + update_rate).floor()
+        xmp = torch.nn.functional.pad(x_out[:, 3:4, ...], pad=[1, 1, 1, 1], mode="circular")
+        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0) > 0.1
+        x_out = x_out * update_mask * pre_life_mask
+        # Restore gene channels
+        x_out = torch.cat((x_out[:, :-self.gene_size, ...], gene), dim=1)
+        
+        if return_trajectory:
+            return x_out, torch.tensor(energies, device=x.device), trajectory
+        else:
+            return x_out
+        
+
