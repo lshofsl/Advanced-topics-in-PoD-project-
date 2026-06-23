@@ -217,10 +217,10 @@ class Energy_learnable(torch.nn.Module):
         Returns: scalar energy (accumulated over batch and grid)
         """
         # Get perception for all cells
-        perception = self.reduced_perception(x)  # (B, C + 3*C, H, W)
+        y = reduced_perception(x[:, :self.chn - self.gene_size], 0)
         
         # Evaluate energy density at each cell via MLP
-        energy_density = torch.relu(self.w1(perception))  # (B, hidden_n, H, W)
+        energy_density = torch.relu(self.w1(y))  # (B, hidden_n, H, W)
         energy_density = self.w2(energy_density)  # (B, 1, H, W)
         
         # Sum over all cells to get total energy
