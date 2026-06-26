@@ -141,6 +141,17 @@ class GeneCA(torch.nn.Module):
         return x
 
 
+def compute_energy(self, v, h, b_eff, c_eff):
+    """Compute E(v,h|u) for diagnostic purposes."""
+    v_term = ((v - b_eff) ** 2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
+    # Wh term: manually compute v @ W @ h (careful with shapes)
+    Wh = torch.nn.functional.conv2d(v.unsqueeze(1), self.W.weight.unsqueeze(-1), padding=0)
+    wh_term = (v / self.sigma**2 * Wh).sum(dim=1, keepdim=True)
+    c_term = (c_eff * h).sum(dim=1, keepdim=True)
+    E = v_term - wh_term - c_term
+    return E
+
+
 
 
 class CRBM(torch.nn.Module):
@@ -164,28 +175,39 @@ class CRBM(torch.nn.Module):
         torch.nn.init.normal_(self.A.weight, std=0.01)
         torch.nn.init.normal_(self.B.weight, std=0.01)
         
-        
-        self.gene_bias_h = torch.nn.Conv2d(gene_size, h_dim, 1)
         # To drive the morphologies in the energy landscape, we need to be projecting the genes stored in the weights, therefor they energy will not mixup during the training  
-        #self.gene_proj = torch.nn.Conv2d(3, h_dim, 1) 
+        #self.gene_bias_h = torch.nn.Conv2d(gene_size, h_dim, 1) -- The projection of the gene bias on the latent space help to improve the network but it needs a more strong 
+        ##modulation, for this reason we move into a low-rank modulation 
+        self.gene_proj = torch.nn.Conv2d(gene_size, v_dim * h_dim, 1, bias=False)
+        torch.nn.init.normal_(self.gene_proj.weight, std=0.01)
+        
 
     def forward(self, x, update_rate=0.5):
         gene = x[:, -self.gene_size:, ...] #Gene channels 
         s = x[:, :self.chn, ...]  # Public channels (hidden+RGBA)
         v = x[:, :self.v_dim, ...] #Visible channels (RBGA)
+        
+        delta_flat = self.gene_proj(gene)               # low-rank gene modulation 
+        B_, _, H_, W_ = delta_flat.shape
+        delta = delta_flat.view(B_, self.h_dim, self.v_dim, H_, W_) 
 
         # perception over RGBA+hidden+gene, gene only ever feeds u
         y = reduced_perception(x[:, :self.chn + self.gene_size], 0)
         u = y  
+        
+        v_exp = v.unsqueeze(1)                            # (B, 1, v_dim, H, W)
+        Wv_base = self.W(v)                               # (B, h_dim, H, W) -- base term via normal conv
+        Wv_gene = (delta * v_exp).sum(dim=2)               # (B, h_dim, H, W) -- per-pixel gene-modulated term
+
 
         b_eff = self.b + self.A(u)
-        c_eff = self.c + self.B(u) + self.gene_bias_h(gene)
+        c_eff = self.c + self.B(u)
 
         # mean-field hidden (Bernoulli/sigmoid), conv W acts as v->h map
-        hidden = torch.sigmoid(self.W(v) / (self.sigma ** 2) + c_eff)
+        hidden = torch.sigmoid((Wv_base + Wv_gene) / (self.sigma**2) + c_eff)
 
         # mean-field visible reconstruction (Gaussian), W^T via conv_transpose
-        v_new = torch.nn.functional.conv_transpose2d(hidden, self.W.weight) + b_eff
+        v_new = torch.nn.functional.conv_transpose2d(hidden, self.W.weight) + Wh_gene + b_eff
 
         s_new = torch.cat([v_new, hidden], dim=1)
 
@@ -196,6 +218,11 @@ class CRBM(torch.nn.Module):
 
         s_update = s + (s_new - s) * update_mask * pre_life_mask
         x = torch.cat((s_update, gene), dim=1)
+        
+        
+        #Energy 
+        E = compute_energy(v_new, hidden, b_eff, c_eff)
+        
         return x
         
         
