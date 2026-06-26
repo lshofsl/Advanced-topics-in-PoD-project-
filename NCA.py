@@ -172,7 +172,7 @@ class CRBM(torch.nn.Module):
         
         
     def compute_energy(self, v, h, b_eff, c_eff):
-        v_term = ((v - b_eff) ** 2).sum(dim=1, keepdim=True) / (2 * self.sigma**2
+        v_term = ((v - b_eff) ** 2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
         Wh = torch.nn.functional.conv2d(v.unsqueeze(1), self.W.weight.unsqueeze(-1), padding=0)
         wh_term = (v / self.sigma**2 * Wh).sum(dim=1, keepdim=True)
         c_term = (c_eff * h).sum(dim=1, keepdim=True)
