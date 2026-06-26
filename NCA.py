@@ -219,7 +219,7 @@ class CRBM(torch.nn.Module):
         
         
         #Energy 
-        E = self.compute_energy(v_new, hidden, b_eff, c_eff)
+        #E = self.compute_energy(v_new, hidden, b_eff, c_eff)
         
         return x
         
