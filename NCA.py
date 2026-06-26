@@ -195,18 +195,17 @@ class CRBM(torch.nn.Module):
         y = reduced_perception(x[:, :self.chn + self.gene_size], 0)
         u = y  
         
-        hidden_exp = hidden.unsqueeze(2)                      # (B, h_dim, 1, H, W)
-        Wh_gene = (delta * hidden_exp).sum(dim=1) 
+
         Wv_base = self.W(v)
         Wv_gene = (delta * v_exp).sum(dim=2)
-
-
 
         b_eff = self.b + self.A(u)
         c_eff = self.c + self.B(u)
 
         # mean-field hidden (Bernoulli/sigmoid), conv W acts as v->h map
         hidden = torch.sigmoid((Wv_base + Wv_gene) / (self.sigma**2) + c_eff)
+        hidden_exp = hidden.unsqueeze(2)                      # (B, h_dim, 1, H, W)
+        Wh_gene = (delta * hidden_exp).sum(dim=1) 
 
         # mean-field visible reconstruction (Gaussian), W^T via conv_transpose
         v_new = torch.nn.functional.conv_transpose2d(hidden, self.W.weight) + Wh_gene + b_eff
