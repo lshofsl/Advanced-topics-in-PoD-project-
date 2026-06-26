@@ -195,9 +195,11 @@ class CRBM(torch.nn.Module):
         y = reduced_perception(x[:, :self.chn + self.gene_size], 0)
         u = y  
         
-        v_exp = v.unsqueeze(1)                            # (B, 1, v_dim, H, W)
-        Wv_base = self.W(v)                               # (B, h_dim, H, W) -- base term via normal conv
-        Wv_gene = (delta * v_exp).sum(dim=2)               # (B, h_dim, H, W) -- per-pixel gene-modulated term
+        hidden_exp = hidden.unsqueeze(2)                      # (B, h_dim, 1, H, W)
+        Wh_gene = (delta * hidden_exp).sum(dim=1) 
+        Wv_base = self.W(v)
+        Wv_gene = (delta * v_exp).sum(dim=2)
+
 
 
         b_eff = self.b + self.A(u)
