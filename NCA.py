@@ -173,11 +173,10 @@ class CRBM(torch.nn.Module):
         
     def compute_energy(self, v, h, b_eff, c_eff):
         v_term = ((v - b_eff) ** 2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
-        Wh = torch.nn.functional.conv2d(v.unsqueeze(1), self.W.weight.unsqueeze(-1), padding=0)
-        wh_term = (v / self.sigma**2 * Wh).sum(dim=1, keepdim=True)
+        Wv = self.W(v)                                   # (B, h_dim, H, W)
+        wh_term = (Wv * h).sum(dim=1, keepdim=True) / self.sigma**2
         c_term = (c_eff * h).sum(dim=1, keepdim=True)
-        E = v_term - wh_term - c_term
-        return E
+        return v_term - wh_term - c_term
 
     def forward(self, x, update_rate=0.5):
         gene = x[:, -self.gene_size:, ...] #Gene channels 
@@ -205,7 +204,7 @@ class CRBM(torch.nn.Module):
         Wh_gene = (delta * hidden_exp).sum(dim=1) 
 
         # mean-field visible reconstruction (Gaussian), W^T via conv_transpose
-        v_new = torch.nn.functional.conv_transpose2d(hidden, self.W.weight) + Wh_gene + b_eff
+        v_new = self.sigma**2 * (F.conv_transpose2d(hidden, self.W.weight) + Wh_gene) + b_eff
 
         s_new = torch.cat([v_new, hidden], dim=1)
 
