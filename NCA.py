@@ -204,7 +204,7 @@ class CRBM(torch.nn.Module):
         Wh_gene = (delta * hidden_exp).sum(dim=1) 
 
         # mean-field visible reconstruction (Gaussian), W^T via conv_transpose
-        v_new = self.sigma**2 * (F.conv_transpose2d(hidden, self.W.weight) + Wh_gene) + b_eff
+        v_new = self.sigma**2 * (torch.nn.functional.conv_transpose2d(hidden, self.W.weight) + Wh_gene) + b_eff
 
         s_new = torch.cat([v_new, hidden], dim=1)
 
