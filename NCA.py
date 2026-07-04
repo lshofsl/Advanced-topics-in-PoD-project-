@@ -143,173 +143,89 @@ class GeneCA(torch.nn.Module):
 
 
 
-class CRBM(torch.nn.Module):
+class CRBM(nn.Module):
     def __init__(self, v_dim=4, h_dim=9, u_dim=64, gene_size=3, sigma=1.0):
         super().__init__()
         self.v_dim, self.h_dim, self.u_dim = v_dim, h_dim, u_dim
         self.sigma = sigma
-        self.chn = v_dim + h_dim          # public channels (RGBA + hidden)
+        self.chn = v_dim + h_dim          # Public channels (RGBA + hidden)
         self.gene_size = gene_size
 
         # W as 1x1 conv: maps v_dim channels -> h_dim channels (per pixel)
-        self.W = torch.nn.Conv2d(v_dim, h_dim, 1, bias=False)
-        torch.nn.init.normal_(self.W.weight, std=0.01)
+        self.W = nn.Conv2d(v_dim, h_dim, 1, bias=False)
+        nn.init.normal_(self.W.weight, std=0.01)
 
-        self.b = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
-        self.c = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
+        self.b = nn.Parameter(torch.zeros(1, v_dim, 1, 1))
+        self.c = nn.Parameter(torch.zeros(1, h_dim, 1, 1))
 
         # A, B as 1x1 convs: u_dim -> v_dim / h_dim, per pixel
-        self.A = torch.nn.Conv2d(u_dim, v_dim, 1, bias=False)
-        self.B = torch.nn.Conv2d(u_dim, h_dim, 1, bias=False)
-        torch.nn.init.normal_(self.A.weight, std=0.01)
-        torch.nn.init.normal_(self.B.weight, std=0.01)
+        self.A = nn.Conv2d(u_dim, v_dim, 1, bias=False)
+        self.B = nn.Conv2d(u_dim, h_dim, 1, bias=False)
+        nn.init.normal_(self.A.weight, std=0.01)
+        nn.init.normal_(self.B.weight, std=0.01)
         
-        # To drive the morphologies in the energy landscape, we need to be projecting the genes stored in the weights, therefor they energy will not mixup during the training  
-        #self.gene_bias_h = torch.nn.Conv2d(gene_size, h_dim, 1) -- The projection of the gene bias on the latent space help to improve the network but it needs a more strong 
-        ##modulation, for this reason we move into a low-rank modulation 
-        self.gene_proj = torch.nn.Conv2d(gene_size, v_dim * h_dim, 1, bias=False)
-        torch.nn.init.normal_(self.gene_proj.weight, std=0.01)
-        
+        # Low-rank gene modulation to drive the morphology landscape
+        self.gene_proj = nn.Conv2d(gene_size, v_dim * h_dim, 1, bias=False)
+        nn.init.normal_(self.gene_proj.weight, std=0.01)
         
     def compute_energy(self, v, h, b_eff, c_eff):
+        """Calculates energy configuration per pixel."""
         v_term = ((v - b_eff) ** 2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
-        Wv = self.W(v)                                   # (B, h_dim, H, W)
+        Wv = self.W(v)                                    # (B, h_dim, H, W)
         wh_term = (Wv * h).sum(dim=1, keepdim=True) / self.sigma**2
         c_term = (c_eff * h).sum(dim=1, keepdim=True)
         return v_term - wh_term - c_term
 
-    def forward(self, x, update_rate=0.5):
-        gene = x[:, -self.gene_size:, ...] #Gene channels 
-        s = x[:, :self.chn, ...]  # Public channels (hidden+RGBA)
-        v = x[:, :self.v_dim, ...] #Visible channels (RBGA)
+    def forward(self, x, update_rate=0.5, settlement_steps=3):
+        gene = x[:, -self.gene_size:, ...]  # Gene channels 
+        s = x[:, :self.chn, ...]            # Public channels (RGBA + hidden)
         
-        delta_flat = self.gene_proj(gene)               # low-rank gene modulation 
+        # 1. Compute Low-Rank Modulation Tensors
+        delta_flat = self.gene_proj(gene)
         B_, _, H_, W_ = delta_flat.shape
         delta = delta_flat.view(B_, self.h_dim, self.v_dim, H_, W_) 
 
-        # perception over RGBA+hidden+gene, gene only ever feeds u
-        y = reduced_perception(x[:, :self.chn + self.gene_size], 0)
-        u = y  
+        # 2. Extract context via perception network
+        # Assumes pathway.py 'reduced_perception' function is available globally
+        # If your function requires a mask_n parameter, map it to self.gene_size
+        u = reduced_perception(x[:, :self.chn + self.gene_size], self.gene_size)
         
-        v_exp = v.unsqueeze(1)
-        Wv_base = self.W(v)
-        Wv_gene = (delta * v_exp).sum(dim=2)
-
         b_eff = self.b + self.A(u)
         c_eff = self.c + self.B(u)
+        
+        # Initialize internal states for our ring settlement loop
+        v_curr = x[:, :self.v_dim, ...].clone()
+        h_curr = x[:, self.v_dim:self.chn, ...].clone()
+        
+        # Correctly layout transpose weight parameters for 1x1 kernel maps
+        W_transpose = self.W.weight.transpose(0, 1)
 
-        # mean-field hidden (Bernoulli/sigmoid), conv W acts as v->h map
-        hidden = torch.sigmoid((Wv_base + Wv_gene) / (self.sigma**2) + c_eff)
-        hidden_exp = hidden.unsqueeze(2)                      # (B, h_dim, 1, H, W)
-        Wh_gene = (delta * hidden_exp).sum(dim=1) 
+        # 3. Cyclical Settlement Loop (Ring/Recurrent Information Exchange)
+        for _ in range(settlement_steps):
+            # Step A: Update Hidden channels using current Visible states
+            v_exp = v_curr.unsqueeze(1)
+            Wv_base = self.W(v_curr)
+            Wv_gene = (delta * v_exp).sum(dim=2)
+            h_curr = torch.sigmoid((Wv_base + Wv_gene) / (self.sigma**2) + c_eff)
+            
+            # Step B: Update Visible channels using newly settled Hidden states
+            hidden_exp = h_curr.unsqueeze(2)
+            Wh_gene = (delta * hidden_exp).sum(dim=1) 
+            v_curr = self.sigma**2 * (F.conv_transpose2d(h_curr, W_transpose) + Wh_gene) + b_eff
 
-        # mean-field visible reconstruction (Gaussian), W^T via conv_transpose
-        v_new = self.sigma**2 * (torch.nn.functional.conv_transpose2d(hidden, self.W.weight) + Wh_gene) + b_eff
+        # Pack aggregated results back into public shapes
+        s_new = torch.cat([v_curr, h_curr], dim=1)
 
-        s_new = torch.cat([v_new, hidden], dim=1)
-
-        b, c, h, w = y.shape
+        # 4. Standard Stochastic NCA Update Masking
+        b, c, h, w = u.shape
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
-        xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
-        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0).cuda() > 0.1
+        
+        # Pad and pull the Alpha channel (Index 3) for the living mask
+        xmp = F.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
+        pre_life_mask = F.max_pool2d(xmp, 3, 1, 0) > 0.1
 
         s_update = s + (s_new - s) * update_mask * pre_life_mask
-        x = torch.cat((s_update, gene), dim=1)
+        return torch.cat((s_update, gene), dim=1)
         
-        
-        #Energy 
-        #E = self.compute_energy(v_new, hidden, b_eff, c_eff)
-        
-        return x
-        
-        
-#To have a learnable, no explicit energy function, we can work with the same small MLP as the baseline NCA.         
-
-class Energy_learnable(torch.nn.Module):
-    def __init__(self, chn=12, hidden_n=96, gene_size=3):
-        super().__init__()
-        self.chn = chn #private channels
-        self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
-        self.w2 = torch.nn.Conv2d(hidden_n, chn - gene_size, 1, bias=False)
-        self.w2.weight.data.zero_()
-        self.gene_size = gene_size
-
-    def compute_energy(self, x):
-        """
-        Compute total energy E_θ(x) = sum_i e_θ(P_i(x))
-        x: (B, C, H, W), requires_grad=True
-        Returns: scalar energy (accumulated over batch and grid)
-        """
-        # Get perception for all cells
-        y = reduced_perception(x[:, :self.chn], 0)
-        
-        # Evaluate energy density at each cell via MLP
-        energy_density = torch.relu(self.w1(y))  # (B, hidden_n, H, W)
-        energy_density = self.w2(energy_density)  # (B, 1, H, W)
-        
-        # Sum over all cells to get total energy
-        energy = energy_density.sum()
-        
-        return energy
-    
-    def forward(self, x, steps=32, eta=0.01, update_rate=0.5, return_trajectory=False):
-        """
-        Energy-gradient NCA update
-        
-        Args:
-            x: (B, C, H, W) state
-            steps: number of gradient descent steps
-            eta: step size for gradient descent
-            update_rate: probability of updating each cell (standard NCA)
-            return_trajectory: if True, return trajectory; else just final state
-        
-        Returns:
-            x_out: (B, C, H, W) updated state
-            (optional) trajectory, energies if return_trajectory=True
-        """
-        B, C, H, W = x.shape
-        
-        # Separate gene channels (static, don't update)
-        gene = x[:, -self.gene_size:, ...]
-        x_dynamic = x[:, :-self.gene_size, ...]
-        
-        trajectory = [x.detach().clone()]
-        energies = []
-        
-        # Gradient descent on energy
-        x_current = x.clone().requires_grad_(True)
-        
-        for t in range(steps):
-            # Compute energy
-            energy = self.compute_energy(x_current)
-            energies.append(energy.item())
-            
-            # Compute gradient ∇_x E
-            grad_x = torch.autograd.grad(
-                energy, x_current,
-                create_graph=False,
-                retain_graph=False)[0]
-            
-            # Update: x ← x - η ∇_x E
-            with torch.no_grad():
-                x_new = x_current - eta * grad_x
-                trajectory.append(x_new.clone())
-            
-            # Reattach for next iteration
-            x_current = x_new.detach().requires_grad_(True)
-        
-        x_out = x_current.detach()
-
-        update_mask = (torch.rand(B, 1, H, W, device=x.device) + update_rate).floor()
-        xmp = torch.nn.functional.pad(x_out[:, 3:4, ...], pad=[1, 1, 1, 1], mode="circular")
-        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0) > 0.1
-        x_out = x_out * update_mask * pre_life_mask
-        # Restore gene channels
-        x_out = torch.cat((x_out[:, :-self.gene_size, ...], gene), dim=1)
-        
-        if return_trajectory:
-            return x_out, torch.tensor(energies, device=x.device), trajectory
-        else:
-            return x_out
         
 
