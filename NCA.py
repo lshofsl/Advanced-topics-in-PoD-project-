@@ -144,7 +144,7 @@ class GeneCA(torch.nn.Module):
 
 
 class CRBM(torch.nn.Module):
-    def __init__(self, v_dim=4, h_dim=9, u_dim=64, gene_size=3, sigma=0.1):
+    def __init__(self, v_dim=4, h_dim=9, u_dim=64, gene_size=3, sigma=0.3):
         super().__init__()
         self.v_dim, self.h_dim, self.u_dim = v_dim, h_dim, u_dim
         self.sigma = sigma
