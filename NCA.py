@@ -1,7 +1,7 @@
 from multiprocessing import dummy
 from sys import prefix
 
-import torch as nn 
+import torch 
 
 def perchannel_conv(x, filters):
     b, ch, h, w = x.shape
