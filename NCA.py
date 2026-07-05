@@ -1,7 +1,7 @@
 from multiprocessing import dummy
 from sys import prefix
 
-import torch
+import torch as nn 
 
 def perchannel_conv(x, filters):
     b, ch, h, w = x.shape
@@ -152,21 +152,21 @@ class CRBM(nn.Module):
         self.gene_size = gene_size
 
         # W as 1x1 conv: maps v_dim channels -> h_dim channels (per pixel)
-        self.W = nn.Conv2d(v_dim, h_dim, 1, bias=False)
-        nn.init.normal_(self.W.weight, std=0.01)
+        self.W = torch.nn.Conv2d(v_dim, h_dim, 1, bias=False)
+        torch.nn.init.normal_(self.W.weight, std=0.01)
 
-        self.b = nn.Parameter(torch.zeros(1, v_dim, 1, 1))
-        self.c = nn.Parameter(torch.zeros(1, h_dim, 1, 1))
+        self.b = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
+        self.c = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
 
         # A, B as 1x1 convs: u_dim -> v_dim / h_dim, per pixel
-        self.A = nn.Conv2d(u_dim, v_dim, 1, bias=False)
-        self.B = nn.Conv2d(u_dim, h_dim, 1, bias=False)
-        nn.init.normal_(self.A.weight, std=0.01)
-        nn.init.normal_(self.B.weight, std=0.01)
+        self.A = torch.nn.Conv2d(u_dim, v_dim, 1, bias=False)
+        self.B = torch.nn.Conv2d(u_dim, h_dim, 1, bias=False)
+        torch.nn.init.normal_(self.A.weight, std=0.01)
+        torch.nn.init.normal_(self.B.weight, std=0.01)
         
         # Low-rank gene modulation to drive the morphology landscape
-        self.gene_proj = nn.Conv2d(gene_size, v_dim * h_dim, 1, bias=False)
-        nn.init.normal_(self.gene_proj.weight, std=0.01)
+        self.gene_proj = torch.nn.Conv2d(gene_size, v_dim * h_dim, 1, bias=False)
+        torch.nn.init.normal_(self.gene_proj.weight, std=0.01)
         
     def compute_energy(self, v, h, b_eff, c_eff):
         """Calculates energy configuration per pixel."""
