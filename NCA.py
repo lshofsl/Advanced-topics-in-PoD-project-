@@ -218,7 +218,7 @@ class CRBM(torch.nn.Module):
         
         # Pad and pull the Alpha channel (Index 3) for the living mask
         xmp = F.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
-        pre_life_mask = F.max_pool2d(xmp, 3, 1, 0) > 0.1
+        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0) > 0.1
 
         s_update = s + (s_new - s) * update_mask * pre_life_mask
         return torch.cat((s_update, gene), dim=1)
