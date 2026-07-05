@@ -195,9 +195,6 @@ class CRBM(torch.nn.Module):
         v_curr = x[:, :self.v_dim, ...].clone()
         h_curr = x[:, self.v_dim:self.chn, ...].clone()
         
-        # Correctly layout transpose weight parameters for 1x1 kernel maps
-        W_transpose = self.W.weight.transpose(0, 1)
-
         # 3. Cyclical Settlement Loop (Ring/Recurrent Information Exchange)
         for _ in range(settlement_steps):
             # Step A: Update Hidden channels using current Visible states
@@ -209,7 +206,8 @@ class CRBM(torch.nn.Module):
             # Step B: Update Visible channels using newly settled Hidden states
             hidden_exp = h_curr.unsqueeze(2)
             Wh_gene = (delta * hidden_exp).sum(dim=1) 
-            v_curr = self.sigma**2 * (torch.nn.functional.conv_transpose2d(h_curr, W_transpose) + Wh_gene) + b_eff
+            v_curr = self.sigma**2 * (torch.nn.functional.conv_transpose2d(h_curr, self.W.weight) + Wh_gene
+) + b_eff
 
         # Pack aggregated results back into public shapes
         s_new = torch.cat([v_curr, h_curr], dim=1)
