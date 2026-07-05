@@ -201,7 +201,7 @@ class CRBM(torch.nn.Module):
             v_exp = v_curr.unsqueeze(1)
             Wv_base = self.W(v_curr)
             Wv_gene = (delta * v_exp).sum(dim=2)
-            h_curr = torch.sigmoid((Wv_base + Wv_gene) / (self.sigma**2) + c_eff)
+            h_curr = torch.sigmoid((Wv_base + Wv_gene) + c_eff)
             
             # Step B: Update Visible channels using newly settled Hidden states
             hidden_exp = h_curr.unsqueeze(2)
