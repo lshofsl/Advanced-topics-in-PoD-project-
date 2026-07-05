@@ -209,7 +209,7 @@ class CRBM(torch.nn.Module):
             # Step B: Update Visible channels using newly settled Hidden states
             hidden_exp = h_curr.unsqueeze(2)
             Wh_gene = (delta * hidden_exp).sum(dim=1) 
-            v_curr = self.sigma**2 * (F.conv_transpose2d(h_curr, W_transpose) + Wh_gene) + b_eff
+            v_curr = self.sigma**2 * (torch.nn.functional.conv_transpose2d(h_curr, W_transpose) + Wh_gene) + b_eff
 
         # Pack aggregated results back into public shapes
         s_new = torch.cat([v_curr, h_curr], dim=1)
