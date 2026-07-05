@@ -186,9 +186,7 @@ class CRBM(torch.nn.Module):
         delta = delta_flat.view(B_, self.h_dim, self.v_dim, H_, W_) 
 
         # 2. Extract context via perception network
-        # Assumes pathway.py 'reduced_perception' function is available globally
-        # If your function requires a mask_n parameter, map it to self.gene_size
-        u = reduced_perception(x[:, :self.chn + self.gene_size], self.gene_size)
+        u = reduced_perception(x[:, :(self.chn + self.gene_size)])
         
         b_eff = self.b + self.A(u)
         c_eff = self.c + self.B(u)
