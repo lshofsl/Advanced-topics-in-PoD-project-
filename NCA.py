@@ -144,7 +144,7 @@ class GeneCA(torch.nn.Module):
 
 
 class CRBM(torch.nn.Module):
-    def __init__(self, v_dim=4, h_dim=9, u_dim=64, gene_size=3, sigma=0.3):
+    def __init__(self, v_dim=4, h_dim=9, u_dim=64, gene_size=3, sigma=0.5):
         super().__init__()
         self.v_dim, self.h_dim, self.u_dim = v_dim, h_dim, u_dim
         self.sigma = sigma
@@ -201,7 +201,7 @@ class CRBM(torch.nn.Module):
             v_exp = v_curr.unsqueeze(1)
             Wv_base = self.W(v_curr)
             Wv_gene = (delta * v_exp).sum(dim=2)
-            h_curr = torch.sigmoid((Wv_base + Wv_gene) + c_eff)
+            h_curr = torch.sigmoid((Wv_base + Wv_gene) / self.sigma**2 + c_eff)
             
             # Step B: Update Visible channels using newly settled Hidden states
             hidden_exp = h_curr.unsqueeze(2)
