@@ -264,23 +264,6 @@ class ReducedCA(nn.Module):
         return x + y * update_mask * pre_life_mask
  
  
-# ─────────────────────────────────────────────────────────────────────────────
-# QUICK SANITY CHECK
-# ─────────────────────────────────────────────────────────────────────────────
- 
-if __name__ == '__main__':
-    device = 'cpu'
-    B, C, H, W = 2, 12, 32, 32
- 
-    for mode in [None, 'full', 'cross_only', 'self_only']:
-        model = GeneCA(chn=C, hidden_n=64, gene_size=3,
-                       pathway_mode=mode, device=device)
-        x = torch.zeros(B, C, H, W)
-        x[:, 3, H//2, W//2] = 1.0   # alpha seed
-        out = model(x)
-        label = mode if mode else 'standard'
-        assert out.shape == (B, C, H, W), f"Shape mismatch for mode={label}"
-        print(f"[{label:12s}]  output shape: {tuple(out.shape)}")
 
         
         
