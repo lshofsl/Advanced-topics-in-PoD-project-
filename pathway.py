@@ -280,7 +280,7 @@ if __name__ == '__main__':
         out = model(x)
         label = mode if mode else 'standard'
         assert out.shape == (B, C, H, W), f"Shape mismatch for mode={label}"
-        print(f"[{label:12s}]  output shape: {tuple(out.shape)}  ✓")
+        print(f"[{label:12s}]  output shape: {tuple(out.shape)}")
 
         
         
