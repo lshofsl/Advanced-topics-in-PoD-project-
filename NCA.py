@@ -153,6 +153,10 @@ class RBM(torch.nn.Module):
         # W is a 3x3 conv filter to get the interaction with the neighbors 
         self.W = torch.nn.Conv2d(v_dim, h_dim, kernel_size=3, padding=1, padding_mode='circular', bias=False)
         torch.nn.init.normal_(self.W.weight, std=0.01)
+        
+        #Use of FiLM modulation
+        self.film_v = torch.nn.Conv2d(64, v_dim, kernel_size=1)
+        self.film_h = torch.nn.Conv2d(64, h_dim, kernel_size=1)
 
         self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
         self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
@@ -171,26 +175,37 @@ class RBM(torch.nn.Module):
         a_eff = self.a 
         b_eff = self.b 
         
+        #We introduce the perception vector as a modulation in the weight matrix 
+        y = F.relu(reduced_perception(x[:, :self.chn], 0))  
+        
+        gamma_v = torch.sigmoid(self.film_v(y)) * 2.0
+        gamma_h = torch.sigmoid(self.film_h(y)) * 2.0
+        
+        
         v_curr = x[:, :self.v_dim, ...].clone()
         
-        # 1. Compute p(h|v) -> Fixed: divided by sigma^2
-        Wv_base = self.W(v_curr)
-        h_curr = torch.sigmoid((Wv_base) / (self.sigma**2) + b_eff)
+        # Compute p(h|v) -> Fixed: divided by sigma^2
+        v_scaled = v_curr * gamma_v
+        W_v = self.W(v_scaled)
+        h_activation = (W_v * gamma_h) / (self.sigma**2) + self.b
+        h_curr = torch.sigmoid(h_activation)
             
-        # 2. Compute p(v|h) -> Fixed: removed sigma^2 multiplier & handled circular transpose via flipped weights
-        # Flip weights along spatial dimensions (H and W) and swap input/output channels for transpose equivalent
-        w_flipped = torch.flip(self.W.weight, dims=[2, 3]).transpose(0, 1)
-        h_padded = F.pad(h_curr, pad=[1, 1, 1, 1], mode="circular")
-        v_curr = F.conv2d(h_padded, w_flipped) + a_eff
+        #Compute p(v|h) 
 
-        # Pack aggregated results back into public shapes
-        s_new = torch.cat([v_curr, h_curr], dim=1)
+        h_scaled = h_curr * gamma_h
+        w_t = self.W.weight.transpose(0, 1)
+        w_t_flipped = torch.flip(w_t, dims=[2, 3])
+        h_padded = F.pad(h_scaled, pad=[1, 1, 1, 1], mode="circular")
+        W_t_h = F.conv2d(h_padded, w_t_flipped)
+    
+        
+        v_new = (W_t_h * gamma_v) + self.a
 
-        # 3. Standard Stochastic NCA Update Masking
+        # Standard NCA Masking and Update
+        s_new = torch.cat([v_new, h_curr], dim=1)
         b, c, h, w = s.shape
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         
-        # Pad and pull the Alpha channel (Index 3) for the living mask
         xmp = F.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
         pre_life_mask = F.max_pool2d(xmp, 3, 1, 0) > 0.1
 
