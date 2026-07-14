@@ -141,6 +141,133 @@ class GeneCA(torch.nn.Module):
         return x
 
 
+class RBM(torch.nn.Module):
+    def __init__(self, v_dim=4, h_dim=9, gene_size=3, sigma=0.5):
+        super().__init__()
+        self.v_dim, self.h_dim = v_dim, h_dim
+        self.sigma = sigma
+        self.chn = v_dim + h_dim          # Public channels (RGBA + hidden)
+        self.gene_size = gene_size
+
+        # W as 1x1 conv: maps v_dim channels -> h_dim channels (per pixel)
+        self.W = torch.nn.Conv2d(v_dim, h_dim, 1, bias=False)
+        torch.nn.init.normal_(self.W.weight, std=0.01)
+
+        self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
+        self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
+
+        
+    def compute_energy(self, v, h, a_eff, b_eff):
+        v_term = ((v - a_eff)**2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)   #Gaussian values
+        Wv = self.W(v)                                    # (B, h_dim, H, W)
+        wh_term = (Wv * h).sum(dim=1, keepdim=True) / self.sigma**2
+        c_term = (b_eff * h).sum(dim=1, keepdim=True)
+        return  v_term - wh_term - c_term
+
+    def forward(self, x, update_rate=0.5):
+        gene = x[:, -self.gene_size:, ...]  # Gene channels 
+        s = x[:, :self.chn, ...]            # Public channels (RGBA + hidden)
+        
+        a_eff = self.a 
+        b_eff = self.b 
+        
+        v_curr = x[:, :self.v_dim, ...].clone()
+        h_curr = x[:, self.v_dim:self.chn, ...].clone()
+        
+        #Compute p(h|v)
+        v_exp = v_curr.unsqueeze(1)
+        Wv_base = self.W(v_curr)
+        h_curr = torch.sigmoid((Wv_base) / self.sigma + b_eff)
+            
+        #Compute p(v|h)
+        hidden_exp = h_curr.unsqueeze(2)
+        v_curr = self.sigma**2 * (torch.nn.functional.conv_transpose2d(h_curr, self.W.weight) + a_eff)
+
+        # Pack aggregated results back into public shapes
+        s_new = torch.cat([v_curr, h_curr], dim=1)
+
+        # 4. Standard Stochastic NCA Update Masking
+        b, c, h, w = s.shape
+        update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
+        
+        # Pad and pull the Alpha channel (Index 3) for the living mask
+        xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
+        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0) > 0.1
+
+        s_update = s + (s_new - s) * update_mask * pre_life_mask
+        return torch.cat((s_update, gene), dim=1)
+
+
+    def sample_hidden(self, v, a_eff=None, b_eff=None):
+        """Compute p(h=1|v) and return both the probabilities and a sample."""
+        b_eff = self.b if b_eff is None else b_eff
+        h_prob = torch.sigmoid(self.W(v) / self.sigma**2 + b_eff)
+        h_sample = torch.bernoulli(h_prob)
+        return h_prob, h_sample
+
+    def sample_visible(self, h, a_eff=None):
+        """Compute the mean of p(v|h) for a Gaussian visible unit (no added noise)."""
+        a_eff = self.a if a_eff is None else a_eff
+        v_mean = a_eff + self.sigma**2 * torch.nn.functional.conv_transpose2d(h, self.W.weight)
+        return v_mean
+
+    def gibbs_step(self, v):
+        """One full v -> h -> v Gibbs sweep."""
+        h_prob, h_sample = self.sample_hidden(v)
+        v_new = self.sample_visible(h_sample)
+        return v_new, h_prob, h_sample
+
+    def contrastive_divergence(self, v_data, k=1, fantasy_v=None):
+        """
+        CD-k loss for this Conv2d-based Gaussian-Bernoulli RBM.
+
+        Args:
+            v_data: (B, v_dim, H, W) tensor - the clamped visible "data" (target morphology,
+                 or a rollout state you're treating as data — see thesis Sec. 3).
+            k: number of Gibbs steps for the negative phase (CD-k). k=1 recovers CD-1.
+            fantasy_v: optional persistent chain state (for PCD). If None, the chain
+                   starts from v_data itself (standard CD).
+
+        Returns:
+            loss: scalar tensor, the energy-gap loss to combine with L_BPTT via
+              backward(). Also returns the updated fantasy state for PCD bookkeeping.
+        """
+        a_eff, b_eff = self.a, self.b
+
+        # ---- Positive phase: use the data, with h inferred (not sampled) ----
+        h_prob_data, _ = self.sample_hidden(v_data, a_eff, b_eff)
+        E_data = self.compute_energy(v_data, h_prob_data, a_eff, b_eff)
+    
+        # ---- Negative phase: run k Gibbs steps from either v_data or a persistent chain ----
+        v_model = v_data.detach() if fantasy_v is None else fantasy_v.detach()
+        for _ in range(k):
+            v_model, h_prob_model, h_sample_model = self.gibbs_step(v_model)
+
+        # Stop gradient through the sampling chain — CD does NOT backprop through Gibbs steps,
+        # only through the energy evaluated at the sampled endpoint.
+        v_model = v_model.detach()
+        h_prob_model = h_prob_model.detach()
+
+        E_model = self.compute_energy(v_model, h_prob_model, a_eff, b_eff)
+    
+        # CD objective: push data energy down, model/fantasy energy up.
+        # Mean over batch AND spatial dims (H, W), since every pixel is a local "sample".
+        loss = E_data.mean() - E_model.mean()
+
+        return loss, v_model  # v_model returned as the new fantasy state for PCD
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class CRBM(torch.nn.Module):
@@ -169,7 +296,6 @@ class CRBM(torch.nn.Module):
         torch.nn.init.normal_(self.gene_proj.weight, std=0.01)
         
     def compute_energy(self, v, h, b_eff, c_eff):
-        """Calculates energy configuration per pixel."""
         v_term = ((v - b_eff) ** 2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
         Wv = self.W(v)                                    # (B, h_dim, H, W)
         wh_term = (Wv * h).sum(dim=1, keepdim=True) / self.sigma**2
