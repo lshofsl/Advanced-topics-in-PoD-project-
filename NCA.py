@@ -142,7 +142,7 @@ class GeneCA(torch.nn.Module):
 
 
 class RBM(torch.nn.Module):
-    def __init__(self, v_dim=4, h_dim=9, gene_size=3, sigma=0.5):
+    def __init__(self, v_dim=4, h_dim=9, gene_size=3, sigma=0.1):
         super().__init__()
         self.v_dim, self.h_dim = v_dim, h_dim
         self.sigma = sigma
