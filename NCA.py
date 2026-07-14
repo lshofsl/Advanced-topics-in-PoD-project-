@@ -156,13 +156,12 @@ class RBM(torch.nn.Module):
         self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
         self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
 
-        
     def compute_energy(self, v, h, a_eff, b_eff):
-        v_term = ((v - a_eff)**2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)   #Gaussian values
-        Wv = self.W(v)                                    # (B, h_dim, H, W)
-        wh_term = (Wv * h).sum(dim=1, keepdim=True) / self.sigma**2
+        v_term = ((v - a_eff)**2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)   # Gaussian values
+        Wv = self.W(v)                                                             # (B, h_dim, H, W)
+        wh_term = (Wv * h).sum(dim=1, keepdim=True) / (self.sigma**2)
         c_term = (b_eff * h).sum(dim=1, keepdim=True)
-        return  v_term - wh_term - c_term
+        return v_term - wh_term - c_term
 
     def forward(self, x, update_rate=0.5):
         gene = x[:, -self.gene_size:, ...]  # Gene channels 
@@ -172,27 +171,27 @@ class RBM(torch.nn.Module):
         b_eff = self.b 
         
         v_curr = x[:, :self.v_dim, ...].clone()
-        h_curr = x[:, self.v_dim:self.chn, ...].clone()
         
-        #Compute p(h|v)
-        v_exp = v_curr.unsqueeze(1)
+        # 1. Compute p(h|v) -> Fixed: divided by sigma^2
         Wv_base = self.W(v_curr)
-        h_curr = torch.sigmoid((Wv_base) / self.sigma + b_eff)
+        h_curr = torch.sigmoid((Wv_base) / (self.sigma**2) + b_eff)
             
-        #Compute p(v|h)
-        hidden_exp = h_curr.unsqueeze(2)
-        v_curr = self.sigma**2 * (torch.nn.functional.conv_transpose2d(h_curr, self.W.weight) + a_eff)
+        # 2. Compute p(v|h) -> Fixed: removed sigma^2 multiplier & handled circular transpose via flipped weights
+        # Flip weights along spatial dimensions (H and W) and swap input/output channels for transpose equivalent
+        w_flipped = torch.flip(self.W.weight, dims=[2, 3]).transpose(0, 1)
+        h_padded = F.pad(h_curr, pad=[1, 1, 1, 1], mode="circular")
+        v_curr = F.conv2d(h_padded, w_flipped) + a_eff
 
         # Pack aggregated results back into public shapes
         s_new = torch.cat([v_curr, h_curr], dim=1)
 
-        # 4. Standard Stochastic NCA Update Masking
+        # 3. Standard Stochastic NCA Update Masking
         b, c, h, w = s.shape
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         
         # Pad and pull the Alpha channel (Index 3) for the living mask
-        xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
-        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0) > 0.1
+        xmp = F.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
+        pre_life_mask = F.max_pool2d(xmp, 3, 1, 0) > 0.1
 
         s_update = s + (s_new - s) * update_mask * pre_life_mask
         return torch.cat((s_update, gene), dim=1)
