@@ -146,9 +146,9 @@ class RBM(torch.nn.Module):
     def __init__(self, v_dim=4, h_dim=9, gene_size=3, sigma=0.1):
         super().__init__()
         self.v_dim, self.h_dim = v_dim, h_dim
-        self.sigma = sigma
-        self.chn = v_dim + h_dim          # Public channels (RGBA + hidden)
+        self.sigma = sigma         
         self.gene_size = gene_size
+        self.chn = v_dim + h_dim + gene_size
 
         # W is a 3x3 conv filter to get the interaction with the neighbors 
         self.W = torch.nn.Conv2d(v_dim, h_dim, kernel_size=3, padding=1, padding_mode='circular', bias=False)
