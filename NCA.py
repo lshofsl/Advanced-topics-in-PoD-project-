@@ -149,8 +149,8 @@ class RBM(torch.nn.Module):
         self.chn = v_dim + h_dim          # Public channels (RGBA + hidden)
         self.gene_size = gene_size
 
-        # W as 1x1 conv: maps v_dim channels -> h_dim channels (per pixel)
-        self.W = torch.nn.Conv2d(v_dim, h_dim, 1, bias=False)
+        # W is a 3x3 conv filter to get the interaction with the neighbors 
+        self.W = torch.nn.Conv2d(v_dim, h_dim, kernel_size=3, padding=1, padding_mode='circular', bias=False)
         torch.nn.init.normal_(self.W.weight, std=0.01)
 
         self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
@@ -208,7 +208,7 @@ class RBM(torch.nn.Module):
     def sample_visible(self, h, a_eff=None):
         """Compute the mean of p(v|h) for a Gaussian visible unit (no added noise)."""
         a_eff = self.a if a_eff is None else a_eff
-        v_mean = a_eff + self.sigma**2 * torch.nn.functional.conv_transpose2d(h, self.W.weight)
+        v_mean = a_eff + self.sigma**2 * torch.nn.functional.conv_transpose2d(h, self.W.weight, padding=1)
         return v_mean
 
     def gibbs_step(self, v):
