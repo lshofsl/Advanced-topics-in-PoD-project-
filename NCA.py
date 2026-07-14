@@ -217,44 +217,28 @@ class RBM(torch.nn.Module):
         v_new = self.sample_visible(h_sample)
         return v_new, h_prob, h_sample
 
-    def contrastive_divergence(self, v_data, k=1, fantasy_v=None):
+    def contrastive_divergence(self, v_data, k=1):
         """
-        CD-k loss for this Conv2d-based Gaussian-Bernoulli RBM.
-
-        Args:
-            v_data: (B, v_dim, H, W) tensor - the clamped visible "data" (target morphology,
-                 or a rollout state you're treating as data — see thesis Sec. 3).
-            k: number of Gibbs steps for the negative phase (CD-k). k=1 recovers CD-1.
-            fantasy_v: optional persistent chain state (for PCD). If None, the chain
-                   starts from v_data itself (standard CD).
-
-        Returns:
-            loss: scalar tensor, the energy-gap loss to combine with L_BPTT via
-              backward(). Also returns the updated fantasy state for PCD bookkeeping.
+        CD-k loss (non-persistent) for this Conv2d-based Gaussian-Bernoulli RBM.
+        Negative phase always restarts from v_data.
         """
         a_eff, b_eff = self.a, self.b
 
-        # ---- Positive phase: use the data, with h inferred (not sampled) ----
+        # Positive phase
         h_prob_data, _ = self.sample_hidden(v_data, a_eff, b_eff)
         E_data = self.compute_energy(v_data, h_prob_data, a_eff, b_eff)
-    
-        # ---- Negative phase: run k Gibbs steps from either v_data or a persistent chain ----
-        v_model = v_data.detach() if fantasy_v is None else fantasy_v.detach()
+
+        # Negative phase: k Gibbs steps starting from the data itself
+        v_model = v_data.detach()
         for _ in range(k):
             v_model, h_prob_model, h_sample_model = self.gibbs_step(v_model)
 
-        # Stop gradient through the sampling chain — CD does NOT backprop through Gibbs steps,
-        # only through the energy evaluated at the sampled endpoint.
         v_model = v_model.detach()
         h_prob_model = h_prob_model.detach()
-
         E_model = self.compute_energy(v_model, h_prob_model, a_eff, b_eff)
-    
-        # CD objective: push data energy down, model/fantasy energy up.
-        # Mean over batch AND spatial dims (H, W), since every pixel is a local "sample".
-        loss = E_data.mean() - E_model.mean()
 
-        return loss, v_model  # v_model returned as the new fantasy state for PCD
+        loss = E_data.mean() - E_model.mean()
+        return loss
 
 
 
