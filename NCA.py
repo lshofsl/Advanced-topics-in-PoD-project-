@@ -148,6 +148,7 @@ class RBM(torch.nn.Module):
         self.v_dim, self.h_dim = v_dim, h_dim
         self.sigma = sigma         
         self.gene_size = gene_size
+        self.public = v_dim + h_dim 
         self.chn = v_dim + h_dim + gene_size
 
         # W is a 3x3 conv filter to get the interaction with the neighbors 
@@ -169,8 +170,8 @@ class RBM(torch.nn.Module):
         return v_term - wh_term - c_term
 
     def forward(self, x, update_rate=0.5):
-        gene = x[:, -self.gene_size:, ...]  # Gene channels 
-        s = x[:, :self.chn, ...]            # Public channels (RGBA + hidden)
+        gene = x[:, -self.gene_size:, ...]     # Gene channels 
+        s = x[:, :self.public, ...]            # Public channels (RGBA + hidden)
         
         a_eff = self.a 
         b_eff = self.b 
