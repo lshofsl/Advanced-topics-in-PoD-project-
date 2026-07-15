@@ -238,6 +238,12 @@ class RBM(torch.nn.Module):
         wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True) / self.sigma**2
         c_term = (self.b * h).sum(dim=1, keepdim=True)
         return v_term - wh_term - c_term
+        
+    def gibbs_step(self, v):
+        """One full v -> h -> v Gibbs sweep."""
+        h_prob, h_sample = self.sample_hidden(v)
+        v_new = self.sample_visible(h_sample)
+        return v_new, h_prob, h_sample
 
     def contrastive_divergence(self, v_data, k=1):
         """
