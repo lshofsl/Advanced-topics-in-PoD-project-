@@ -181,15 +181,15 @@ class RBM(torch.nn.Module):
         
         v_curr = x[:, :self.v_dim, ...].clone()
         
-        
-        # Compute p(h|v) 
+        #Compute p(h|v)
         v_scaled = v_curr * gamma_v
-        W_v = self.W(v_scaled)
-        h_activation = (W_v * gamma_h) / (sigma**2) + b_eff
+        # Division of the visible state over sigma to scale correctly to the hidden states
+        v_pre_conv = v_scaled / (sigma**2) 
+        W_v = self.W(v_pre_conv)
+        h_activation = (W_v * gamma_h) + self.b
         h_curr = torch.sigmoid(h_activation)
             
         #Compute p(v|h) 
-
         h_scaled = h_curr * gamma_h
         w_t = self.W.weight.transpose(0, 1)
         w_t_flipped = torch.flip(w_t, dims=[2, 3])
