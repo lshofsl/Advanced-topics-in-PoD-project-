@@ -239,34 +239,35 @@ class RBM(torch.nn.Module):
         c_term = (self.b * h).sum(dim=1, keepdim=True)
         return v_term - wh_term - c_term
         
-    def gibbs_step(self, v):
+    def gibbs_step(self, v, gamma_v, gamma_h):
         """One full v -> h -> v Gibbs sweep."""
-        h_prob, h_sample = self.sample_hidden(v)
-        v_new = self.sample_visible(h_sample)
+        h_prob, h_sample = self.sample_hidden(v, gamma_v, gamma_h)
+        v_new = self.sample_visible(h_sample, gamma_v, gamma_h)
         return v_new, h_prob, h_sample
 
-    def contrastive_divergence(self, v_data, k=1):
-        """
-        CD-k loss (non-persistent) for this Conv2d-based Gaussian-Bernoulli RBM.
-        Negative phase always restarts from v_data.
-        """
-        a_eff, b_eff = self.a, self.b
+    def contrastive_divergence(self, v_data, gene_data, k=1, h_init=None):
+    # Build a full state tensor for the positive phase's perception vector.
+        b, _, H, W = v_data.shape
+        #h is not given on the target image, we use a placeholder of only zeros
+        h_placeholder = torch.zeros(b, self.h_dim, H, W, device=v_data.device) if h_init is None else h_init  
+        x_data = torch.cat([v_data, h_placeholder, gene_data], dim=1)
 
-        # Positive phase
-        h_prob_data, _ = self.sample_hidden(v_data, a_eff, b_eff)
-        E_data = self.compute_energy(v_data, h_prob_data, a_eff, b_eff)
+        y_data = F.relu(reduced_perception(x_data, 0))
+        gamma_v = torch.sigmoid(self.film_v(y_data)) * 2.0
+        gamma_h = torch.sigmoid(self.film_h(y_data)) * 2.0
 
-        # Negative phase: k Gibbs steps starting from the data itself
+        h_prob_data, _ = self.sample_hidden(v_data, gamma_v, gamma_h)
+        E_data = self.compute_energy(v_data, h_prob_data, gamma_v, gamma_h)
+
         v_model = v_data.detach()
         for _ in range(k):
-            v_model, h_prob_model, h_sample_model = self.gibbs_step(v_model)
+            v_model, h_prob_model, h_sample_model = self.gibbs_step(v_model, gamma_v, gamma_h)
 
         v_model = v_model.detach()
         h_prob_model = h_prob_model.detach()
-        E_model = self.compute_energy(v_model, h_prob_model, a_eff, b_eff)
+        E_model = self.compute_energy(v_model, h_prob_model, gamma_v, gamma_h)
 
-        loss = E_data.mean() - E_model.mean()
-        return loss
+        return E_data.mean() - E_model.mean()
 
 
 
