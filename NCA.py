@@ -170,10 +170,8 @@ class RBM(torch.nn.Module):
         b_eff = self.b 
         sigma = torch.exp(self.log_sigma)
         
-
-        
         #We introduce the perception vector as a modulation in the weight matrix 
-        y = F.relu(reduced_perception(x[:, :self.chn], 0))  
+        y = reduced_perception(x[:, :self.chn], 0)
         
         gamma_v = torch.sigmoid(self.film_v(y)) * 2.0
         gamma_h = torch.sigmoid(self.film_h(y)) * 2.0
@@ -186,7 +184,7 @@ class RBM(torch.nn.Module):
         # Division of the visible state over sigma to scale correctly to the hidden states
         v_pre_conv = v_scaled / (sigma**2) 
         W_v = self.W(v_pre_conv)
-        h_activation = (W_v * gamma_h) + self.b
+        h_activation = (W_v * gamma_h) + b_eff
         h_curr = torch.sigmoid(h_activation)
             
         #Compute p(v|h) 
@@ -197,7 +195,7 @@ class RBM(torch.nn.Module):
         W_t_h = F.conv2d(h_padded, w_t_flipped)
     
         #Ensure to have [0,1] range values 
-        v_new = torch.sigmoid((W_t_h * gamma_v) + self.a)
+        v_new = torch.sigmoid(((W_t_h * gamma_v) * (sigma**2)) + a_eff)
 
         # Standard NCA Masking and Update
         s_new = torch.cat([v_new, h_curr], dim=1)
