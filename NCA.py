@@ -186,7 +186,7 @@ class RBM(torch.nn.Module):
         v_curr = x[:, :self.v_dim, ...].clone()
         
         
-        # Compute p(h|v) -> Fixed: divided by sigma^2
+        # Compute p(h|v) 
         v_scaled = v_curr * gamma_v
         W_v = self.W(v_scaled)
         h_activation = (W_v * gamma_h) / (self.sigma**2) + self.b
@@ -202,9 +202,6 @@ class RBM(torch.nn.Module):
     
         
         v_new = (W_t_h * gamma_v) + self.a
-        #To have a more solid representation of the colors we need to clap between [0.0,1.0]
-        v_rgb_clamped = torch.clamp(v_new[:, :3, ...], 0.0, 1.0)
-        v_new = torch.cat([v_rgb_clamped, v_new[:, 3:, ...]], dim=1)
 
         # Standard NCA Masking and Update
         s_new = torch.cat([v_new, h_curr], dim=1)
