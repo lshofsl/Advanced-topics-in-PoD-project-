@@ -276,6 +276,39 @@ class RBM(torch.nn.Module):
         return E_data.mean() - E_model.mean()
 
 
+    def persistent_contrastive_divergence(self, v_target, v_actual, h_actual, gene_data, k=1):
+        # --- 1. Positive Phase (using target image) ---
+        # Construct perception vector for the target image (using zeros for target h)
+        b, _, H, W = v_target.shape
+        h_target_placeholder = torch.zeros(b, self.h_dim, H, W, device=v_target.device)
+        x_target = torch.cat([v_target, h_target_placeholder, gene_data], dim=1)
+    
+        y_target = F.relu(reduced_perception(x_target, 0))
+        gamma_v_t = torch.sigmoid(self.film_v(y_target)) * 2.0
+        gamma_h_t = torch.sigmoid(self.film_h(y_target)) * 2.0
+    
+        # Sample hidden states that COHERENTLY match the target image
+        h_prob_target, _ = self.sample_hidden(v_target, gamma_v_t, gamma_h_t)
+        E_target = self.compute_energy(v_target, h_prob_target, gamma_v_t, gamma_h_t)
+
+        # --- 2. Negative Phase (starting from the actual NCA states) ---
+        # Construct perception vector for the actual noisy state
+        x_actual = torch.cat([v_actual, h_actual, gene_data], dim=1)
+        y_actual = F.relu(reduced_perception(x_actual, 0))
+        gamma_v_a = torch.sigmoid(self.film_v(y_actual)) * 2.0
+        gamma_h_a = torch.sigmoid(self.film_h(y_actual)) * 2.0
+
+        # Start the Gibbs chain directly from the NCA's current state!
+        v_model = v_actual.detach()
+        for _ in range(k):
+            v_model, h_prob_model, h_sample_model = self.gibbs_step(v_model, gamma_v_a, gamma_h_a)
+
+        v_model = v_model.detach()
+        h_prob_model = h_prob_model.detach()
+        E_model = self.compute_energy(v_model, h_prob_model, gamma_v_a, gamma_h_a)
+    
+        return E_target.mean() - E_model.mean()
+
 
 
 
