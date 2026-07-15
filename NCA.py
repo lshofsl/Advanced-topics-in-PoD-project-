@@ -146,7 +146,6 @@ class RBM(torch.nn.Module):
     def __init__(self, v_dim=4, h_dim=9, gene_size=3):
         super().__init__()
         self.v_dim, self.h_dim = v_dim, h_dim
-        self.sigma = sigma         
         self.gene_size = gene_size
         self.public = v_dim + h_dim 
         self.chn = v_dim + h_dim + gene_size
