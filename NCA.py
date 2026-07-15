@@ -161,8 +161,6 @@ class RBM(torch.nn.Module):
         self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
         self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
         self.log_sigma = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
-        self.sigma = torch.exp(self.log_sigma)
-
 
     def forward(self, x, update_rate=0.5):
         gene = x[:, -self.gene_size:, ...]     # Gene channels 
@@ -170,6 +168,8 @@ class RBM(torch.nn.Module):
         
         a_eff = self.a 
         b_eff = self.b 
+        sigma = torch.exp(self.log_sigma)
+        
 
         
         #We introduce the perception vector as a modulation in the weight matrix 
@@ -185,7 +185,7 @@ class RBM(torch.nn.Module):
         # Compute p(h|v) 
         v_scaled = v_curr * gamma_v
         W_v = self.W(v_scaled)
-        h_activation = (W_v * gamma_h) / (self.sigma**2) + self.b
+        h_activation = (W_v * gamma_h) / (sigma**2) + b_eff
         h_curr = torch.sigmoid(h_activation)
             
         #Compute p(v|h) 
@@ -196,8 +196,8 @@ class RBM(torch.nn.Module):
         h_padded = F.pad(h_scaled, pad=[1, 1, 1, 1], mode="circular")
         W_t_h = F.conv2d(h_padded, w_t_flipped)
     
-        
-        v_new = (W_t_h * gamma_v) + self.a
+        #Ensure to have [0,1] range values 
+        v_new = torch.sigmoid((W_t_h * gamma_v) + self.a)
 
         # Standard NCA Masking and Update
         s_new = torch.cat([v_new, h_curr], dim=1)
@@ -214,7 +214,7 @@ class RBM(torch.nn.Module):
     def sample_hidden(self, v, gamma_v, gamma_h):
         v_scaled = v * gamma_v  #FiLM scaling 
         Wv = self.W(v_scaled)
-        h_prob = torch.sigmoid((Wv * gamma_h) / self.sigma**2 + self.b)
+        h_prob = torch.sigmoid((Wv * gamma_h) / sigma**2 + self.b)
         h_sample = torch.bernoulli(h_prob)
         return h_prob, h_sample
 
@@ -227,9 +227,9 @@ class RBM(torch.nn.Module):
         return v_mean
 
     def compute_energy(self, v, h, gamma_v, gamma_h):
-        v_term = ((v - self.a)**2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
+        v_term = ((v - self.a)**2).sum(dim=1, keepdim=True) / (2 * sigma**2)
         Wv = self.W(v * gamma_v)
-        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True) / self.sigma**2
+        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True) / sigma**2
         c_term = (self.b * h).sum(dim=1, keepdim=True)
         return v_term - wh_term - c_term
         
