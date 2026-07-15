@@ -210,24 +210,38 @@ class RBM(torch.nn.Module):
 
 
     def sample_hidden(self, v, gamma_v, gamma_h):
-        v_scaled = v * gamma_v  #FiLM scaling 
-        Wv = self.W(v_scaled)
-        h_prob = torch.sigmoid((Wv * gamma_h) / sigma**2 + self.b)
+        sigma = torch.exp(self.log_sigma)
+        v_scaled = v * gamma_v  # FiLM scaling 
+        
+        # Divide by variance on the visible channels before convolution to prevent size mismatch
+        v_pre_conv = v_scaled / (sigma**2)
+        Wv = self.W(v_pre_conv)
+        
+        h_prob = torch.sigmoid((Wv * gamma_h) + self.b)
         h_sample = torch.bernoulli(h_prob)
         return h_prob, h_sample
 
     def sample_visible(self, h, gamma_v, gamma_h):
+        sigma = torch.exp(self.log_sigma)
         h_scaled = h * gamma_h
         w_t = torch.flip(self.W.weight.transpose(0, 1), dims=[2, 3])
         h_padded = F.pad(h_scaled, pad=[1,1,1,1], mode="circular")
         W_t_h = F.conv2d(h_padded, w_t)
-        v_mean = (W_t_h * gamma_v) + self.a
+        
+        # Bound the reconstructed visible states in [0, 1] range
+        v_mean = torch.sigmoid(((W_t_h * gamma_v) * (sigma**2)) + self.a)
         return v_mean
 
     def compute_energy(self, v, h, gamma_v, gamma_h):
+        sigma = torch.exp(self.log_sigma)  # Fixed NameError
+        
         v_term = ((v - self.a)**2).sum(dim=1, keepdim=True) / (2 * sigma**2)
-        Wv = self.W(v * gamma_v)
-        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True) / sigma**2
+        
+        # Divide by variance on the visible channels before convolution to prevent size mismatch
+        v_pre_conv = (v * gamma_v) / (sigma**2)
+        Wv = self.W(v_pre_conv)
+        
+        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True)
         c_term = (self.b * h).sum(dim=1, keepdim=True)
         return v_term - wh_term - c_term
         
@@ -238,9 +252,9 @@ class RBM(torch.nn.Module):
         return v_new, h_prob, h_sample
 
     def contrastive_divergence(self, v_data, gene_data, k=1, h_init=None):
-    # Build a full state tensor for the positive phase's perception vector.
+        # Build a full state tensor for the positive phase's perception vector.
         b, _, H, W = v_data.shape
-        #h is not given on the target image, we use a placeholder of only zeros
+        # If h is not given on the target image, use a placeholder of zeros
         h_placeholder = torch.zeros(b, self.h_dim, H, W, device=v_data.device) if h_init is None else h_init  
         x_data = torch.cat([v_data, h_placeholder, gene_data], dim=1)
 
