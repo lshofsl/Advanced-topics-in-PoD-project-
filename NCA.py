@@ -185,6 +185,7 @@ class RBM(torch.nn.Module):
         
         v_curr = x[:, :self.v_dim, ...].clone()
         
+        
         # Compute p(h|v) -> Fixed: divided by sigma^2
         v_scaled = v_curr * gamma_v
         W_v = self.W(v_scaled)
@@ -201,6 +202,8 @@ class RBM(torch.nn.Module):
     
         
         v_new = (W_t_h * gamma_v) + self.a
+        #To have a more solid representation of the colors we need to clap between [0.0,1.0]
+        v_new[:, :3, ...] = torch.clamp(v_new[:, :3, ...], 0.0, 1.0)
 
         # Standard NCA Masking and Update
         s_new = torch.cat([v_new, h_curr], dim=1)
@@ -214,24 +217,27 @@ class RBM(torch.nn.Module):
         return torch.cat((s_update, gene), dim=1)
 
 
-    def sample_hidden(self, v, a_eff=None, b_eff=None):
-        """Compute p(h=1|v) and return both the probabilities and a sample."""
-        b_eff = self.b if b_eff is None else b_eff
-        h_prob = torch.sigmoid(self.W(v) / self.sigma**2 + b_eff)
+    def sample_hidden(self, v, gamma_v, gamma_h):
+        v_scaled = v * gamma_v  #FiLM scaling 
+        Wv = self.W(v_scaled)
+        h_prob = torch.sigmoid((Wv * gamma_h) / self.sigma**2 + self.b)
         h_sample = torch.bernoulli(h_prob)
         return h_prob, h_sample
 
-    def sample_visible(self, h, a_eff=None):
-        """Compute the mean of p(v|h) for a Gaussian visible unit (no added noise)."""
-        a_eff = self.a if a_eff is None else a_eff
-        v_mean = a_eff + self.sigma**2 * torch.nn.functional.conv_transpose2d(h, self.W.weight, padding=1)
+    def sample_visible(self, h, gamma_v, gamma_h):
+        h_scaled = h * gamma_h
+        w_t = torch.flip(self.W.weight.transpose(0, 1), dims=[2, 3])
+        h_padded = F.pad(h_scaled, pad=[1,1,1,1], mode="circular")
+        W_t_h = F.conv2d(h_padded, w_t)
+        v_mean = (W_t_h * gamma_v) + self.a
         return v_mean
 
-    def gibbs_step(self, v):
-        """One full v -> h -> v Gibbs sweep."""
-        h_prob, h_sample = self.sample_hidden(v)
-        v_new = self.sample_visible(h_sample)
-        return v_new, h_prob, h_sample
+    def compute_energy(self, v, h, gamma_v, gamma_h):
+        v_term = ((v - self.a)**2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)
+        Wv = self.W(v * gamma_v)
+        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True) / self.sigma**2
+        c_term = (self.b * h).sum(dim=1, keepdim=True)
+        return v_term - wh_term - c_term
 
     def contrastive_divergence(self, v_data, k=1):
         """
