@@ -143,7 +143,7 @@ class GeneCA(torch.nn.Module):
 
 
 class RBM(torch.nn.Module):
-    def __init__(self, v_dim=4, h_dim=9, gene_size=3, sigma=0.1):
+    def __init__(self, v_dim=4, h_dim=9, gene_size=3):
         super().__init__()
         self.v_dim, self.h_dim = v_dim, h_dim
         self.sigma = sigma         
@@ -161,13 +161,9 @@ class RBM(torch.nn.Module):
 
         self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
         self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
+        self.log_sigma = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
+        self.sigma = torch.exp(self.log_sigma)
 
-    def compute_energy(self, v, h, a_eff, b_eff):
-        v_term = ((v - a_eff)**2).sum(dim=1, keepdim=True) / (2 * self.sigma**2)   # Gaussian values
-        Wv = self.W(v)                                                             # (B, h_dim, H, W)
-        wh_term = (Wv * h).sum(dim=1, keepdim=True) / (self.sigma**2)
-        c_term = (b_eff * h).sum(dim=1, keepdim=True)
-        return v_term - wh_term - c_term
 
     def forward(self, x, update_rate=0.5):
         gene = x[:, -self.gene_size:, ...]     # Gene channels 
@@ -175,6 +171,7 @@ class RBM(torch.nn.Module):
         
         a_eff = self.a 
         b_eff = self.b 
+
         
         #We introduce the perception vector as a modulation in the weight matrix 
         y = F.relu(reduced_perception(x[:, :self.chn], 0))  
