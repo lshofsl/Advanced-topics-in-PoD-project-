@@ -245,12 +245,12 @@ class RBM(torch.nn.Module):
         v_new = self.sample_visible(h_sample, gamma_v, gamma_h)
         return v_new, h_prob, h_sample
 
-    def contrastive_divergence(self, v_data, k=1, h_init=None):
+    def contrastive_divergence(self, v_data, gene_data, k=1, h_init=None):
     # Build a full state tensor for the positive phase's perception vector.
         b, _, H, W = v_data.shape
         #h is not given on the target image, we use a placeholder of only zeros
         h_placeholder = torch.zeros(b, self.h_dim, H, W, device=v_data.device) if h_init is None else h_init  
-        x_data = torch.cat([v_data, h_placeholder, self.gene_size], dim=1)
+        x_data = torch.cat([v_data, h_placeholder, gene_data], dim=1)
 
         y_data = F.relu(reduced_perception(x_data, 0))
         gamma_v = torch.sigmoid(self.film_v(y_data)) * 2.0
