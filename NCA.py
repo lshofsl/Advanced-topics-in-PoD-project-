@@ -142,72 +142,9 @@ class GeneCA(torch.nn.Module):
         return x
 
 
-class RBM(torch.nn.Module):
-    def __init__(self, v_dim=4, h_dim=9, gene_size=3):
-        super().__init__()
-        self.v_dim, self.h_dim = v_dim, h_dim
-        self.gene_size = gene_size
-        self.public = v_dim + h_dim 
-        self.chn = v_dim + h_dim + gene_size
 
-        # W is a 3x3 conv filter to get the interaction with the neighbors 
-        self.W = torch.nn.Conv2d(v_dim, h_dim, kernel_size=3, padding=1, padding_mode='circular', bias=False)
-        torch.nn.init.normal_(self.W.weight, std=0.01)
-        
-        #Use of FiLM modulation
-        self.film_v = torch.nn.Conv2d(64, v_dim, kernel_size=1)
-        self.film_h = torch.nn.Conv2d(64, h_dim, kernel_size=1)
 
-        self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
-        self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
-        self.log_sigma = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
-
-    def forward(self, x, update_rate=0.5):
-        gene = x[:, -self.gene_size:, ...]     # Gene channels 
-        s = x[:, :self.public, ...]            # Public channels (RGBA + hidden)
-        
-        a_eff = self.a 
-        b_eff = self.b 
-        sigma = torch.exp(self.log_sigma)
-        
-        #We introduce the perception vector as a modulation in the weight matrix 
-        y = reduced_perception(x[:, :self.chn], 0)
-        
-        gamma_v = torch.sigmoid(self.film_v(y)) * 2.0
-        gamma_h = torch.sigmoid(self.film_h(y)) * 2.0
-        
-        
-        v_curr = x[:, :self.v_dim, ...].clone()
-        
-        #Compute p(h|v)
-        v_scaled = v_curr * gamma_v
-        # Division of the visible state over sigma to scale correctly to the hidden states
-        v_pre_conv = v_scaled / (sigma**2) 
-        W_v = self.W(v_pre_conv)
-        h_activation = (W_v * gamma_h) + b_eff
-        h_curr = torch.sigmoid(h_activation)
-            
-        #Compute p(v|h) 
-        h_scaled = h_curr * gamma_h
-        w_t = self.W.weight.transpose(0, 1)
-        w_t_flipped = torch.flip(w_t, dims=[2, 3])
-        h_padded = F.pad(h_scaled, pad=[1, 1, 1, 1], mode="circular")
-        W_t_h = F.conv2d(h_padded, w_t_flipped)
-    
-        #Ensure to have [0,1] range values 
-        v_new = torch.sigmoid(((W_t_h * gamma_v) * (sigma**2)) + a_eff)
-
-        # Standard NCA Masking and Update
-        s_new = torch.cat([v_new, h_curr], dim=1)
-        b, c, h, w = s.shape
-        update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
-        
-        xmp = F.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
-        pre_life_mask = F.max_pool2d(xmp, 3, 1, 0) > 0.1
-
-        s_update = s + (s_new - s) * update_mask * pre_life_mask
-        return torch.cat((s_update, gene), dim=1)
-
+# FOR TRAINING 
 
     def sample_hidden(self, v, gamma_v, gamma_h):
         sigma = torch.exp(self.log_sigma)
@@ -251,29 +188,128 @@ class RBM(torch.nn.Module):
         v_new = self.sample_visible(h_sample, gamma_v, gamma_h)
         return v_new, h_prob, h_sample
 
-    def contrastive_divergence(self, v_data, gene_data, k=1, h_init=None):
-        # Build a full state tensor for the positive phase's perception vector.
-        b, _, H, W = v_data.shape
-        # If h is not given on the target image, use a placeholder of zeros
-        h_placeholder = torch.zeros(b, self.h_dim, H, W, device=v_data.device) if h_init is None else h_init  
+
+
+## Energy-gradient descent of the RBM model 
+
+def energy_gradient_step(self, v, h, gamma_v, gamma_h, eta=0.1):
+
+
+    v = v.detach().requires_grad_(True)
+    h = h.detach().requires_grad_(True)
+
+    E = self.compute_energy(v, h, gamma_v, gamma_h)  
+    energy_sum = E.sum() 
+
+    grad_v, grad_h = torch.autograd.grad(
+        energy_sum, [v, h], create_graph=True 
+    )
+
+    v_new = v - eta * grad_v
+    h_new = h - eta * grad_h
+    return v_new, h_new
+
+
+
+
+
+class RBM(torch.nn.Module):
+    def __init__(self, v_dim=4, h_dim=9, gene_size=3):
+        super().__init__()
+        self.v_dim, self.h_dim = v_dim, h_dim
+        self.gene_size = gene_size
+        self.public = v_dim + h_dim 
+        self.chn = v_dim + h_dim + gene_size
+
+        # W is a 3x3 conv filter to get the interaction with the neighbors 
+        self.W = torch.nn.Conv2d(v_dim, h_dim, kernel_size=3, padding=1, padding_mode='circular', bias=False)
+        torch.nn.init.normal_(self.W.weight, std=0.01)
+        
+        #Use of FiLM modulation
+        self.film_v = torch.nn.Conv2d(64, v_dim, kernel_size=1)
+        self.film_h = torch.nn.Conv2d(64, h_dim, kernel_size=1)
+
+        self.a = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
+        self.b = torch.nn.Parameter(torch.zeros(1, h_dim, 1, 1))
+        self.log_sigma = torch.nn.Parameter(torch.zeros(1, v_dim, 1, 1))
+
+    def forward(self, x, update_rate=0.5, eta = 0.1):
+        gene = x[:, -self.gene_size:, ...]     # Gene channels 
+        s = x[:, :self.public, ...]            # Public channels (RGBA + hidden)
+        
+        a_eff = self.a 
+        b_eff = self.b 
+        sigma = torch.exp(self.log_sigma)
+        
+        #We introduce the perception vector as a modulation in the weight matrix 
+        y = reduced_perception(x[:, :self.chn], 0)
+        
+        gamma_v = torch.sigmoid(self.film_v(y)) * 2.0
+        gamma_h = torch.sigmoid(self.film_h(y)) * 2.0
+        
+        
+        v_curr = x[:, :self.v_dim, ...].clone()
+        
+        #Compute p(h|v)
+        v_scaled = v_curr * gamma_v
+        # Division of the visible state over sigma to scale correctly to the hidden states
+        v_pre_conv = v_scaled / (sigma**2) 
+        W_v = self.W(v_pre_conv)
+        h_activation = (W_v * gamma_h) + b_eff
+        h_curr = torch.sigmoid(h_activation)
+            
+        #Compute p(v|h) 
+        h_scaled = h_curr * gamma_h
+        w_t = self.W.weight.transpose(0, 1)
+        w_t_flipped = torch.flip(w_t, dims=[2, 3])
+        h_padded = F.pad(h_scaled, pad=[1, 1, 1, 1], mode="circular")
+        W_t_h = F.conv2d(h_padded, w_t_flipped)
+    
+        v_curr = (W_t_h * gamma_v) * (sigma**2) + a_eff
+        
+        v_new, h_new = self.energy_gradient_step(v_curr, h_curr, gamma_v, gamma_h, eta)
+
+        # Standard NCA Masking and Update
+        s_new = torch.cat([v_new, h_new], dim=1)
+        b, c, h, w = s.shape
+        update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
+        
+        xmp = F.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
+        pre_life_mask = F.max_pool2d(xmp, 3, 1, 0) > 0.1
+
+        s_update = s + (s_new - s) * update_mask * pre_life_mask
+        return torch.cat((s_update, gene), dim=1)
+
+
+
+
+    def contrastive_divergence(self, base, gene_data, k=1, h_init=None):
+        v_data = base.detach()
+        B, _, H, W = v_data.shape
+
+        # using a zero-hidden placeholder purely to build the perception vector as h is not on base image 
+        h_placeholder = torch.zeros(B, nca.rbm.h_dim, H, W, device=v_data.device)
         x_data = torch.cat([v_data, h_placeholder, gene_data], dim=1)
+        y_data = reduced_perception(x_data, 0)
+        gamma_v = torch.sigmoid(nca.rbm.film_v(y_data)) * 2.0
+        gamma_h = torch.sigmoid(nca.rbm.film_h(y_data)) * 2.0
 
-        y_data = F.relu(reduced_perception(x_data, 0))
-        gamma_v = torch.sigmoid(self.film_v(y_data)) * 2.0
-        gamma_h = torch.sigmoid(self.film_h(y_data)) * 2.0
+        h_prob_data, _ = sample_hidden(v_data, gamma_v, gamma_h)
+        E_data = compute_energy(v_data, h_prob_data, gamma_v, gamma_h)
 
-        h_prob_data, _ = self.sample_hidden(v_data, gamma_v, gamma_h)
-        E_data = self.compute_energy(v_data, h_prob_data, gamma_v, gamma_h)
-
-        v_model = v_data.detach()
+        # Negative phase: relax from the SAME target via energy-gradient descent,
+        # k steps, matching the actual dynamics used in forward() -- not Gibbs
+        # sampling, to keep this a fair test of the same mechanism.
+        v_model, h_model = v_data.clone(), h_prob_data.clone()
         for _ in range(k):
-            v_model, h_prob_model, h_sample_model = self.gibbs_step(v_model, gamma_v, gamma_h)
+            v_model, h_model = energy_gradient_step(v_model, h_model, gamma_v, gamma_h, eta)
 
         v_model = v_model.detach()
-        h_prob_model = h_prob_model.detach()
-        E_model = self.compute_energy(v_model, h_prob_model, gamma_v, gamma_h)
+        h_model = h_model.detach()
+        E_model = compute_energy(v_model, h_model, gamma_v, gamma_h)
 
-        return E_data.mean() - E_model.mean()
+        cd_loss = E_data.mean() - E_model.mean()
+        return cd_loss
 
 
     def persistent_contrastive_divergence(self, v_target, v_actual, h_actual, gene_data, k=1):
