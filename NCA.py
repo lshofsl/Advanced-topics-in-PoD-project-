@@ -288,7 +288,7 @@ class RBM(torch.nn.Module):
         B, _, H, W = v_data.shape
 
         # using a zero-hidden placeholder purely to build the perception vector as h is not on base image 
-        h_placeholder = torch.zeros(B, nca.rbm.h_dim, H, W, device=v_data.device)
+        h_placeholder = torch.zeros(B, self.h_dim, H, W, device=v_data.device)
         x_data = torch.cat([v_data, h_placeholder, gene_data], dim=1)
         y_data = reduced_perception(x_data, 0)
         gamma_v = torch.sigmoid(self.film_v(y_data)) * 2.0
