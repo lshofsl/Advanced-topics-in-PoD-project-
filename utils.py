@@ -120,20 +120,11 @@ def make_gene_pool(gene_location,pool_size = 1333, height = 50, width= 50, chann
     return pool
 
 def get_pool(pools, partitions, seeds):
-    pool_tot = []
-    for part, pool, seed in zip(partitions, pools, seeds):
-        idx = np.random.choice(pool.shape[0], part, replace=False)
-        idxs.append(idx)
-        p = pool[idx]
-        p[0:1] = seed.clone()
-        pool_tot.append(p)
-    return  torch.cat(pool_tot,dim=0)
+    idx = np.random.choice(pool.shape[0], batch_size, replace=False)
+    batch = pool[idx].clone()
+    batch[0] = seed.clone()
+    return batch, idx
 
-def udate_gene_pool(pools,results, idxs, partitions):
-    pool_new =[]
-    cum_idx = 0
-    for pool, idx, part in zip(pools, idxs, partitions):
-        pool[idx] = results[cum_idx:part+cum_idx]
-        cum_idx+=part
-        pool_new.append(pool)
-    return pool_new
+def update_pool(pools,batch, idx):
+    pool[idx] = batch.detach()
+    return pool
