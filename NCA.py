@@ -291,22 +291,22 @@ class RBM(torch.nn.Module):
         h_placeholder = torch.zeros(B, nca.rbm.h_dim, H, W, device=v_data.device)
         x_data = torch.cat([v_data, h_placeholder, gene_data], dim=1)
         y_data = reduced_perception(x_data, 0)
-        gamma_v = torch.sigmoid(nca.rbm.film_v(y_data)) * 2.0
-        gamma_h = torch.sigmoid(nca.rbm.film_h(y_data)) * 2.0
+        gamma_v = torch.sigmoid(self.film_v(y_data)) * 2.0
+        gamma_h = torch.sigmoid(self.film_h(y_data)) * 2.0
 
-        h_prob_data, _ = sample_hidden(v_data, gamma_v, gamma_h)
-        E_data = compute_energy(v_data, h_prob_data, gamma_v, gamma_h)
+        h_prob_data, _ = self.sample_hidden(v_data, gamma_v, gamma_h)
+        E_data = self.compute_energy(v_data, h_prob_data, gamma_v, gamma_h)
 
         # Negative phase: relax from the SAME target via energy-gradient descent,
         # k steps, matching the actual dynamics used in forward() -- not Gibbs
         # sampling, to keep this a fair test of the same mechanism.
         v_model, h_model = v_data.clone(), h_prob_data.clone()
         for _ in range(k):
-            v_model, h_model = energy_gradient_step(v_model, h_model, gamma_v, gamma_h, eta)
+            v_model, h_model = self.energy_gradient_step(v_model, h_model, gamma_v, gamma_h, eta)
 
         v_model = v_model.detach()
         h_model = h_model.detach()
-        E_model = compute_energy(v_model, h_model, gamma_v, gamma_h)
+        E_model = self.compute_energy(v_model, h_model, gamma_v, gamma_h)
 
         cd_loss = E_data.mean() - E_model.mean()
         return cd_loss
