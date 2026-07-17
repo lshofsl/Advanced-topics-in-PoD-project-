@@ -192,24 +192,20 @@ class GeneCA(torch.nn.Module):
 
 ## Energy-gradient descent of the RBM model 
 
-def energy_gradient_step(self, v, h, gamma_v, gamma_h, eta=0.1):
+    def energy_gradient_step(self, v, h, gamma_v, gamma_h, eta=0.1):
 
+        v = v.detach().requires_grad_(True)
+        h = h.detach().requires_grad_(True)
+    
+        E = self.compute_energy(v, h, gamma_v, gamma_h)  
+        energy_sum = E.sum() 
 
-    v = v.detach().requires_grad_(True)
-    h = h.detach().requires_grad_(True)
+        grad_v, grad_h = torch.autograd.grad(
+            energy_sum, [v, h], create_graph=True)
 
-    E = self.compute_energy(v, h, gamma_v, gamma_h)  
-    energy_sum = E.sum() 
-
-    grad_v, grad_h = torch.autograd.grad(
-        energy_sum, [v, h], create_graph=True 
-    )
-
-    v_new = v - eta * grad_v
-    h_new = h - eta * grad_h
-    return v_new, h_new
-
-
+        v_new = v - eta * grad_v
+        h_new = h - eta * grad_h
+        return v_new, h_new
 
 
 
