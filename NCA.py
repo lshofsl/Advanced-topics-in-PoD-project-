@@ -283,7 +283,7 @@ class RBM(torch.nn.Module):
 
 
 
-    def contrastive_divergence(self, base, gene_data, k=1, h_init=None):
+    def contrastive_divergence(self, base, gene_data, k=1, eta=0.1, h_init=None):
         v_data = base.detach()
         B, _, H, W = v_data.shape
 
