@@ -119,8 +119,7 @@ def make_gene_pool(gene_location,pool_size = 1333, height = 50, width= 50, chann
     pool = seed.tile(pool_size,1,1,1)
     return pool
 
-def get_gene_pool(pools, partitions, seeds):
-    idxs = []
+def get_pool(pools, partitions, seeds):
     pool_tot = []
     for part, pool, seed in zip(partitions, pools, seeds):
         idx = np.random.choice(pool.shape[0], part, replace=False)
@@ -128,7 +127,7 @@ def get_gene_pool(pools, partitions, seeds):
         p = pool[idx]
         p[0:1] = seed.clone()
         pool_tot.append(p)
-    return idxs, torch.cat(pool_tot,dim=0)
+    return  torch.cat(pool_tot,dim=0)
 
 def udate_gene_pool(pools,results, idxs, partitions):
     pool_new =[]
