@@ -144,68 +144,7 @@ class GeneCA(torch.nn.Module):
 
 
 
-# FOR TRAINING 
 
-    def sample_hidden(self, v, gamma_v, gamma_h):
-        sigma = torch.exp(self.log_sigma)
-        v_scaled = v * gamma_v  # FiLM scaling 
-        
-        # Divide by variance on the visible channels before convolution to prevent size mismatch
-        v_pre_conv = v_scaled / (sigma**2)
-        Wv = self.W(v_pre_conv)
-        
-        h_prob = torch.sigmoid((Wv * gamma_h) + self.b)
-        h_sample = torch.bernoulli(h_prob)
-        return h_prob, h_sample
-
-    def sample_visible(self, h, gamma_v, gamma_h):
-        sigma = torch.exp(self.log_sigma)
-        h_scaled = h * gamma_h
-        w_t = torch.flip(self.W.weight.transpose(0, 1), dims=[2, 3])
-        h_padded = F.pad(h_scaled, pad=[1,1,1,1], mode="circular")
-        W_t_h = F.conv2d(h_padded, w_t)
-        
-        # Bound the reconstructed visible states in [0, 1] range
-        v_mean = torch.sigmoid(((W_t_h * gamma_v) * (sigma**2)) + self.a)
-        return v_mean
-
-    def compute_energy(self, v, h, gamma_v, gamma_h):
-        sigma = torch.exp(self.log_sigma)  # Fixed NameError
-        
-        v_term = ((v - self.a)**2).sum(dim=1, keepdim=True) / (2 * sigma**2)
-        
-        # Divide by variance on the visible channels before convolution to prevent size mismatch
-        v_pre_conv = (v * gamma_v) / (sigma**2)
-        Wv = self.W(v_pre_conv)
-        
-        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True)
-        c_term = (self.b * h).sum(dim=1, keepdim=True)
-        return v_term - wh_term - c_term
-        
-    def gibbs_step(self, v, gamma_v, gamma_h):
-        """One full v -> h -> v Gibbs sweep."""
-        h_prob, h_sample = self.sample_hidden(v, gamma_v, gamma_h)
-        v_new = self.sample_visible(h_sample, gamma_v, gamma_h)
-        return v_new, h_prob, h_sample
-
-
-
-## Energy-gradient descent of the RBM model 
-
-    def energy_gradient_step(self, v, h, gamma_v, gamma_h, eta=0.1):
-
-        v = v.detach().requires_grad_(True)
-        h = h.detach().requires_grad_(True)
-    
-        E = self.compute_energy(v, h, gamma_v, gamma_h)  
-        energy_sum = E.sum() 
-
-        grad_v, grad_h = torch.autograd.grad(
-            energy_sum, [v, h], create_graph=True)
-
-        v_new = v - eta * grad_v
-        h_new = h - eta * grad_h
-        return v_new, h_new
 
 
 
@@ -275,6 +214,71 @@ class RBM(torch.nn.Module):
 
         s_update = s + (s_new - s) * update_mask * pre_life_mask
         return torch.cat((s_update, gene), dim=1)
+        
+        
+        
+        # FOR TRAINING 
+
+    def sample_hidden(self, v, gamma_v, gamma_h):
+        sigma = torch.exp(self.log_sigma)
+        v_scaled = v * gamma_v  # FiLM scaling 
+        
+        # Divide by variance on the visible channels before convolution to prevent size mismatch
+        v_pre_conv = v_scaled / (sigma**2)
+        Wv = self.W(v_pre_conv)
+        
+        h_prob = torch.sigmoid((Wv * gamma_h) + self.b)
+        h_sample = torch.bernoulli(h_prob)
+        return h_prob, h_sample
+
+    def sample_visible(self, h, gamma_v, gamma_h):
+        sigma = torch.exp(self.log_sigma)
+        h_scaled = h * gamma_h
+        w_t = torch.flip(self.W.weight.transpose(0, 1), dims=[2, 3])
+        h_padded = F.pad(h_scaled, pad=[1,1,1,1], mode="circular")
+        W_t_h = F.conv2d(h_padded, w_t)
+        
+        # Bound the reconstructed visible states in [0, 1] range
+        v_mean = torch.sigmoid(((W_t_h * gamma_v) * (sigma**2)) + self.a)
+        return v_mean
+
+    def compute_energy(self, v, h, gamma_v, gamma_h):
+        sigma = torch.exp(self.log_sigma)  # Fixed NameError
+        
+        v_term = ((v - self.a)**2).sum(dim=1, keepdim=True) / (2 * sigma**2)
+        
+        # Divide by variance on the visible channels before convolution to prevent size mismatch
+        v_pre_conv = (v * gamma_v) / (sigma**2)
+        Wv = self.W(v_pre_conv)
+        
+        wh_term = ((Wv * gamma_h) * h).sum(dim=1, keepdim=True)
+        c_term = (self.b * h).sum(dim=1, keepdim=True)
+        return v_term - wh_term - c_term
+        
+    def gibbs_step(self, v, gamma_v, gamma_h):
+        """One full v -> h -> v Gibbs sweep."""
+        h_prob, h_sample = self.sample_hidden(v, gamma_v, gamma_h)
+        v_new = self.sample_visible(h_sample, gamma_v, gamma_h)
+        return v_new, h_prob, h_sample
+
+
+
+## Energy-gradient descent of the RBM model 
+
+    def energy_gradient_step(self, v, h, gamma_v, gamma_h, eta=0.1):
+
+        v = v.detach().requires_grad_(True)
+        h = h.detach().requires_grad_(True)
+    
+        E = self.compute_energy(v, h, gamma_v, gamma_h)  
+        energy_sum = E.sum() 
+
+        grad_v, grad_h = torch.autograd.grad(
+            energy_sum, [v, h], create_graph=True)
+
+        v_new = v - eta * grad_v
+        h_new = h - eta * grad_h
+        return v_new, h_new
 
 
 
