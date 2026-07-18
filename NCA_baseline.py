@@ -112,24 +112,25 @@ class ReducedCA(torch.nn.Module):
 
 
 class GeneCA(torch.nn.Module):
-    def __init__(self, chn=12, hidden_n=96, gene_size=3):
+    def __init__(self, chn=12, hidden_n=96):
         super().__init__()
         self.chn = chn
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
-        self.w2 = torch.nn.Conv2d(hidden_n, chn - gene_size, 1, bias=False)
+        self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
         self.w2.weight.data.zero_()
         self.gene_size = gene_size
 
     def forward(self, x, update_rate=0.5):
-        gene = x[:, -self.gene_size:, ...]
         y = reduced_perception(x, 0)
         y = self.w2(torch.relu(self.w1(y)))
         b, c, h, w = y.shape
         update_mask = (torch.rand(b, 1, h, w, device="cuda:0") + update_rate).floor()
         xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
         pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0, ).cuda() > 0.1
-        x = x[:, :x.shape[1] - self.gene_size, ...] + y * update_mask * pre_life_mask
-        x = torch.cat((x, gene), dim=1)
+        x = x + y * update_mask * pre_life_mask
+        x = torch.cat((x), dim=1)
         return x
+
+
 
 
