@@ -140,6 +140,42 @@ class GeneCA(torch.nn.Module):
         s_update = s + (delta_s * update_mask - self.beta * energy_grad) * pre_life_mask
         x = torch.cat((s_update, gene), dim=1)
         return x
+        
+        
+        
+class NCA_EBM(torch.nn.Module):
+    def __init__(self, chn=16, hidden_n=96):
+        super().__init__()
+        self.chn = chn
+        self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
+        self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
+        self.w2.weight.data.zero_()
+
+
+        self.v_dim = 4
+        self.h_dim = chn - self.v_dim
+        self.J = torch.nn.Parameter(torch.zeros(chn, chn))  # local within-cell coupling
+        self.K = torch.nn.Parameter(torch.zeros(chn, chn))  # Interaction with neighbors
+
+    def forward(self, x, update_rate=0.5):
+        y = reduced_perception(x, 0)
+        y = self.w2(torch.relu(self.w1(y)))
+        b, c, h, w = y.shape
+        update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
+        xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
+        pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0).cuda() > 0.1
+        x = x + y * update_mask * pre_life_mask
+        return x
+
+    def energy(self, s):
+        """
+        Local Hopfield-style energy over the public channels (RGBA + hidden).
+        """
+        s_public = s[:, :self.chn, ...]              # (B, chn, H, W)
+        # per-cell quadratic form: s^T J s, summed over channels, at every spatial location
+        Js = torch.einsum('nm,bmhw->bnhw', self.J, s_public)
+        E = -0.5 * (s_public * Js).sum(dim=1, keepdim=True)  # (B, 1, H, W)
+        return E
 
 
 
