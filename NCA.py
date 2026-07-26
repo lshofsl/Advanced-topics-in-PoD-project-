@@ -168,13 +168,10 @@ class NCA_EBM(torch.nn.Module):
         return x
 
     def energy(self, s):
-        """
-        Local Hopfield-style energy over the public channels (RGBA + hidden).
-        """
-        s_public = s[:, :self.chn, ...]              # (B, chn, H, W)
-        # per-cell quadratic form: s^T J s, summed over channels, at every spatial location
-        Js = torch.einsum('nm,bmhw->bnhw', self.J, s_public)
-        E = -0.5 * (s_public * Js).sum(dim=1, keepdim=True)  # (B, 1, H, W)
+        s_public = s[:, :self.chn, ...]
+        J_sym = (self.J + self.J.T) / 2
+        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s_public)
+        E = -0.5 * (s_public * Js).sum(dim=1, keepdim=True)
         return E
 
 
