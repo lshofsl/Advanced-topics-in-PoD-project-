@@ -155,17 +155,25 @@ class NCA_EBM(torch.nn.Module):
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
         self.J = torch.nn.Parameter(torch.zeros(chn, chn))  # local within-cell coupling
-        self.K = torch.nn.Parameter(torch.zeros(chn, chn))  # Interaction with neighbors
+        self.eta = torch.nn.Parameter(torch.tensor(0.1))    # eta parameter
+        #self.K = torch.nn.Parameter(torch.zeros(chn, chn))  # Interaction with neighbors
 
     def forward(self, x, update_rate=0.5):
         y = reduced_perception(x, 0)
         y = self.w2(torch.relu(self.w1(y)))
         b, c, h, w = y.shape
+
+        s_public = x[:, :self.chn, ...]
+        J_sym = (self.J + self.J.T) / 2
+        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s_public)   
+        energy_grad = -Js  
+
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         xmp = torch.nn.functional.pad(x[:, None, 3, ...], pad=[1, 1, 1, 1], mode="circular")
         pre_life_mask = torch.nn.functional.max_pool2d(xmp, 3, 1, 0).cuda() > 0.1
-        x = x + y * update_mask * pre_life_mask
-        return x
+
+        x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
+        return x_update
 
     def energy(self, s):
         s_public = s[:, :self.chn, ...]
