@@ -51,6 +51,7 @@ def reduced_perception(x, mask_n=0):
     return torch.cat((x,obs), dim = 1 )
     
 def get_alive_mask(self, x):
+
     alpha = x[:, 3:4, :, :] 
     padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
     return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
