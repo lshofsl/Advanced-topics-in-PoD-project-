@@ -50,11 +50,7 @@ def reduced_perception(x, mask_n=0):
     obs = perchannel_conv(x_redu,filters)
     return torch.cat((x,obs), dim = 1 )
     
-def get_alive_mask(x):
 
-    alpha = x[:, 3:4, :, :] 
-    padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
-    return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
 class DummyVCA(torch.nn.Module):
     def __init__(self, chn=12, hidden_n=96, mask_n=0):
@@ -163,6 +159,12 @@ class NCA_EBM(torch.nn.Module):
         self.J = torch.nn.Parameter(torch.zeros(chn, chn))  # local within-cell coupling
         self.eta = torch.nn.Parameter(torch.tensor(0.1))    # eta parameter
         #self.K = torch.nn.Parameter(torch.zeros(chn, chn))  # Interaction with neighbors
+
+    def get_alive_mask(self,x):
+
+    alpha = x[:, 3:4, :, :] 
+    padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
+    return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
