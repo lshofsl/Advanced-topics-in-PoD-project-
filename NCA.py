@@ -50,7 +50,7 @@ def reduced_perception(x, mask_n=0):
     obs = perchannel_conv(x_redu,filters)
     return torch.cat((x,obs), dim = 1 )
     
-def get_alive_mask(self, x):
+def get_alive_mask(x):
 
     alpha = x[:, 3:4, :, :] 
     padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
