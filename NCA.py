@@ -161,10 +161,9 @@ class NCA_EBM(torch.nn.Module):
         #self.K = torch.nn.Parameter(torch.zeros(chn, chn))  # Interaction with neighbors
 
     def get_alive_mask(self,x):
-
-    alpha = x[:, 3:4, :, :] 
-    padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
-    return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
+        alpha = x[:, 3:4, :, :] 
+        padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
+        return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
