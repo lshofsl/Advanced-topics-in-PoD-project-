@@ -131,7 +131,7 @@ class NCA(torch.nn.Module):
         y = self.w2(torch.relu(self.w1(y)))
         b, c, h, w = y.shape
         # Stochastic Update
-        update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate).floor()
+        update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate).to(x.dtype)
         # Residual update with the stochastic update and livig mask
         x = x + y * update_mask * pre_life_mask 
         
