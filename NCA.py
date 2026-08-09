@@ -224,7 +224,7 @@ class HYBRID_NCA(torch.nn.Module):
         b, c, h, w = y.shape
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
 
-        x_update = (x + y) * update_mask * pre_life_mask
+        x_update = x + y * update_mask * pre_life_mask
 
         post_life_mask = self.get_alive_mask(x_update)
         x_final = x_update * post_life_mask
