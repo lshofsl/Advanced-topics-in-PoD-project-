@@ -203,7 +203,7 @@ class HYBRID_NCA(torch.nn.Module):
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
         self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
         self.w2.weight.data.zero_()
-        self.J = nn.Parameter(torch.randn(chn, chn) * 0.01  # local within-cell coupling
+        self.J = nn.Parameter(torch.randn(chn, chn) * 0.01)  # local within-cell coupling
 
     def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
