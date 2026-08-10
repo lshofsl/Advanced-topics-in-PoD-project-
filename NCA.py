@@ -226,8 +226,13 @@ class HYBRID_NCA(torch.nn.Module):
 
         x_update = x + y * update_mask * pre_life_mask
 
+        v_part = x_update[:, :self.v_dim, ...]
+        h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
+        x_update = torch.cat([v_part, h_part], dim=1)
+
         post_life_mask = self.get_alive_mask(x_update)
         x_final = x_update * post_life_mask
+
         return x_final
 
 
