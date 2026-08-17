@@ -151,7 +151,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.chn = chn
         self.v_dim = v_dim
         self.W = torch.nn.Parameter(torch.zeros(chn, chn))          # within-cell Hopfield term
-        self.log_kappa = torch.nn.Parameter(torch.full((chn,), -6.0))       # per-channel diffusion strength, starting in 0.0
+        self.log_kappa = torch.nn.Parameter(torch.full((chn,), -15.0))       # per-channel diffusion strength, starting in 0.0
         self.log_eta = torch.nn.Parameter(torch.tensor(-2.0))
 
         laplacian_kernel = torch.tensor([[0., 1., 0.],
@@ -196,25 +196,26 @@ class EnergyOnlyNCA(torch.nn.Module):
         grad_spatial = -kappa * lap
 
         return grad_hopfield + grad_spatial
-
+        
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
         b, c, h, w = x.shape
         eta = torch.nn.functional.softplus(self.log_eta)
 
-        grad_E = self.energy_gradient(x)          # (B, chn, H, W)
+        grad_E = self.energy_gradient(x)
         correction = torch.zeros_like(x)
-        correction[:, :self.chn] = -eta * grad_E   
+        correction[:, :self.chn] = -eta * grad_E
 
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
-        x_update = (x + correction) * update_mask * pre_life_mask
+        x_update = x + correction * update_mask   # x itself is preserved when a cell isn't updated
 
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
-        return x_update * post_life_mask
+        life_mask = (pre_life_mask & post_life_mask).float()   # AND, matching the reference implementation
+        return x_update * life_mask
 
 
 
