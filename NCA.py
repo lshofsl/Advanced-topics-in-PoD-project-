@@ -143,27 +143,53 @@ class GeneCA(torch.nn.Module):
         x = torch.cat((s_update, gene), dim=1)
         return x
         
-        
-        
+
 class EnergyOnlyNCA(torch.nn.Module):
     def __init__(self, chn=16, v_dim=4):
         super().__init__()
         self.chn = chn
         self.v_dim = v_dim
-        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)  
+        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
-        self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
+        self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
-        self.b = torch.nn.Parameter(torch.zeros(chn))  # Bias term
+        self.b = torch.nn.Parameter(torch.zeros(chn))
+        self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))   # was missing entirely
+        self.register_buffer('K_hebb', torch.zeros(chn, chn, 3, 3))
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
         padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
         return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
 
+    @torch.no_grad()
+    def set_target_anchor(self, target):
+        """
+        target: (1, 4, H, W) — visible RGBA only.
+        Builds a fixed Hebbian kernel from visible-channel correlations;
+        rows/cols involving hidden channels stay at zero.
+        """
+        t = target[:, :self.v_dim, ...]
+        live = (t[:, 3:4] > 0.1).float()
+        n_live = live.sum().clamp(min=1.0)
+
+        offsets = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1)]
+        K_hebb = torch.zeros_like(self.K_raw)
+
+        for (dy, dx) in offsets:
+            shifted = torch.roll(t, shifts=(-dy, -dx), dims=(2, 3))
+            corr = torch.einsum('bnhw,bmhw,bohw->nm', t, shifted, live) / n_live
+            K_hebb[:self.v_dim, :self.v_dim, dy+1, dx+1] = corr
+
+        K_hebb_reflected = K_hebb.flip(dims=[2, 3]).transpose(0, 1)
+        K_hebb_sym = 0.5 * (K_hebb + K_hebb_reflected)
+        self.K_hebb.copy_(K_hebb_sym)
+
     def _symmetric_kernel(self):
         K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
-        return 0.5 * (self.K_raw + K_reflected)
+        K_learned_sym = 0.5 * (self.K_raw + K_reflected)
+        gamma = torch.nn.functional.softplus(self.log_gamma)
+        return K_learned_sym + gamma * self.K_hebb
 
     def _spatial_field(self, s):
         s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
@@ -188,7 +214,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         s = x[:, :self.chn, ...]
         h = self._spatial_field(s)
         grad_coupling = -h
-        grad_bias = self.b.view(1, -1, 1, 1)   # broadcasts against (B, chn, H, W) automatically
+        grad_bias = self.b.view(1, -1, 1, 1)
 
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
@@ -204,15 +230,15 @@ class EnergyOnlyNCA(torch.nn.Module):
         correction = torch.zeros_like(x)
         correction[:, :self.chn] = -eta * grad_E
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
-        
+
         x_update = x + correction * update_mask * pre_life_mask
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
-        
+
         post_life_mask = self.get_alive_mask(x_update)
-        
-        return x_update * post_life_mask
+        life_mask = (pre_life_mask & post_life_mask).float()   # restored AND convention
+        return x_update * life_mask
 
 
 class HYBRID_NCA(torch.nn.Module):
