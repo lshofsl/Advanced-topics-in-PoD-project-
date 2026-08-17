@@ -150,7 +150,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         super().__init__()
         self.chn = chn
         self.v_dim = v_dim
-        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-3)  #
+        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)  
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
