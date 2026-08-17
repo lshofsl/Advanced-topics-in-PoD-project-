@@ -232,9 +232,9 @@ class EnergyOnlyNCA(torch.nn.Module):
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
 
         x_update = x + correction * update_mask * pre_life_mask
-        v_part = x_update[:, :self.v_dim, ...]
-        h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
-        x_update = torch.cat([v_part, h_part], dim=1)
+        #v_part = x_update[:, :self.v_dim, ...]
+        #h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
+        #x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
         life_mask = (pre_life_mask & post_life_mask).float()   # restored AND convention
