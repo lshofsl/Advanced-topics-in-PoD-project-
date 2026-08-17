@@ -145,54 +145,75 @@ class GeneCA(torch.nn.Module):
         
         
         
-class NCA_EBM(torch.nn.Module):
-    def __init__(self, chn=16, hidden_n=96):
+class EnergyOnlyNCA(torch.nn.Module):
+    def __init__(self, chn=16, v_dim=4):
         super().__init__()
         self.chn = chn
-        self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
-        self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
-        self.w2.weight.data.zero_()
+        self.v_dim = v_dim
+        self.W = torch.nn.Parameter(torch.zeros(chn, chn))          # within-cell Hopfield term
+        self.log_kappa = torch.nn.Parameter(torch.zeros(chn))       # per-channel diffusion strength, unconstrained sign
+        self.eta = torch.nn.Parameter(torch.tensor(0.1))
 
+        laplacian_kernel = torch.tensor([[0., 1., 0.],
+                                          [1., -4., 1.],
+                                          [0., 1., 0.]])
+        self.register_buffer('lap_kernel', laplacian_kernel.view(1, 1, 3, 3))
 
-        self.v_dim = 4
-        self.h_dim = chn - self.v_dim
-        self.J = torch.nn.Parameter(torch.zeros(chn, chn))  # local within-cell coupling
-        self.eta = torch.nn.Parameter(torch.tensor(0.1))    # eta parameter
-        #self.K = torch.nn.Parameter(torch.zeros(chn, chn))  # Interaction with neighbors
+    def get_alive_mask(self, x):
+        alpha = x[:, 3:4, :, :]
+        padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
+        return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
 
-    def get_alive_mask(self,x):
-        alpha = x[:, 3:4, :, :] 
-        padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
-        return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
+    def _laplacian(self, s):
+        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
+        kernel = self.lap_kernel.repeat(self.chn, 1, 1, 1)     # depthwise, one Laplacian per channel
+        return torch.nn.functional.conv2d(s_padded, kernel, groups=self.chn)
+
+    def energy(self, x):
+        # Total energy — BOTH terms, since this is what mono/drift logging must reflect
+        s = x[:, :self.chn, ...]
+        J_sym = (self.W + self.W.T) / 2
+        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s)
+        E_hopfield = (-0.5 * (s * Js).sum(dim=1)).sum(dim=[1, 2])
+
+        kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
+        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
+        # Dirichlet energy via unfold, or approximate directly from the Laplacian identity:
+        # sum_i sum_j (s_i-s_j)^2 = -2 * sum_i s_i . laplacian(s)_i  (up to the deg*s_i^2 self term)
+        lap = self._laplacian(s)
+        E_spatial = (0.5 * kappa * (s * (-lap))).sum(dim=1).sum(dim=[1, 2])
+
+        return E_hopfield + E_spatial
+
+    def energy_gradient(self, x):
+        s = x[:, :self.chn, ...]
+        J_sym = (self.W + self.W.T) / 2
+        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s)
+        grad_hopfield = -Js
+
+        kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
+        lap = self._laplacian(s)
+        grad_spatial = -kappa * lap
+
+        return grad_hopfield + grad_spatial
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
-        y = reduced_perception(x, 0)
-        y = self.w2(torch.relu(self.w1(y)))
-        b, c, h, w = y.shape
-        s_public = x[:, :self.chn, ...]
-        J_sym = (self.J + self.J.T) / 2
-        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s_public)
-        energy_grad = -Js
+        b, c, h, w = x.shape
+
+        grad_E = self.energy_gradient(x)          # (B, chn, H, W)
+        correction = torch.zeros_like(x)
+        correction[:, :self.chn] = -self.eta * grad_E   
+
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
+        x_update = (x + correction) * update_mask * pre_life_mask
 
-        x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
-
-        # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
-        x_final = x_update * post_life_mask
-        return x_final
-
-    def energy(self, s):
-        s_public = s[:, :self.chn, ...]
-        J_sym = (self.J + self.J.T) / 2
-        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s_public)
-        E = -0.5 * (s_public * Js).sum(dim=1, keepdim=True)
-        return E
+        return x_update * post_life_mask
 
 
 
@@ -205,7 +226,7 @@ class HYBRID_NCA(torch.nn.Module):
         self.w2.weight.data.zero_()
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
-        self.J = torch.nn.Parameter(torch.randn(chn, chn) * 0.01)  # local within-cell coupling
+        self.W = torch.nn.Parameter(torch.randn(chn, chn) * 0.01)  # local within-cell coupling
 
     def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
@@ -214,7 +235,7 @@ class HYBRID_NCA(torch.nn.Module):
 
     def energy(self, x):
         s_public = x[:, :self.chn, ...]
-        J_sym = (self.J + self.J.T) / 2
+        J_sym = (self.W + self.W.T) / 2
         Js = torch.einsum('nm,bmhw->bnhw', J_sym, s_public)
         energy_density = -0.5 * (s_public * Js).sum(dim=1)  #Fix eta 
         return energy_density.sum(dim=[1, 2])
