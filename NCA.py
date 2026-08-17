@@ -151,8 +151,8 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.chn = chn
         self.v_dim = v_dim
         self.W = torch.nn.Parameter(torch.zeros(chn, chn))          # within-cell Hopfield term
-        self.log_kappa = torch.nn.Parameter(torch.zeros(chn))       # per-channel diffusion strength, unconstrained sign
-        self.eta = torch.nn.Parameter(torch.tensor(0.1))
+        self.log_kappa = torch.nn.Parameter(torch.full((chn,), -6.0))       # per-channel diffusion strength, starting in 0.0
+        self.log_eta = torch.nn.Parameter(torch.tensor(-2.0))
 
         laplacian_kernel = torch.tensor([[0., 1., 0.],
                                           [1., -4., 1.],
@@ -200,10 +200,11 @@ class EnergyOnlyNCA(torch.nn.Module):
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
         b, c, h, w = x.shape
+        eta = torch.nn.functional.softplus(self.log_eta)
 
         grad_E = self.energy_gradient(x)          # (B, chn, H, W)
         correction = torch.zeros_like(x)
-        correction[:, :self.chn] = -self.eta * grad_E   
+        correction[:, :self.chn] = -eta * grad_E   
 
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         x_update = (x + correction) * update_mask * pre_life_mask
