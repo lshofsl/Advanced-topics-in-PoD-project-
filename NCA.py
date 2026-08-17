@@ -220,9 +220,9 @@ class EnergyOnlyNCA(torch.nn.Module):
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         x_update = x + correction * update_mask   # x itself is preserved when a cell isn't updated
 
-        v_part = x_update[:, :self.v_dim, ...]
-        h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
-        x_update = torch.cat([v_part, h_part], dim=1)
+        #v_part = x_update[:, :self.v_dim, ...]
+        #h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
+        #x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
         life_mask = (pre_life_mask & post_life_mask).float()   # AND, matching the reference implementation
