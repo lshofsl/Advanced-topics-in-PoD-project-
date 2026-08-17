@@ -155,7 +155,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
-        self.b = nn.Parameter(torch.zeros(chn)) #Bias term
+        self.b = torch.nn.Parameter(torch.zeros(chn)) #Bias term
 
         laplacian_kernel = torch.tensor([[0., 1., 0.],
                                           [1., -4., 1.],
