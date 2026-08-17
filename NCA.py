@@ -150,7 +150,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         super().__init__()
         self.chn = chn
         self.v_dim = v_dim
-        self.W = torch.nn.Parameter(torch.zeros(chn, chn))          # within-cell Hopfield term
+        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-3)       # within-cell Hopfield term
         self.log_kappa = torch.nn.Parameter(torch.full((chn,), -2.0))       # per-channel diffusion strength, starting in 0.0
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
@@ -172,41 +172,39 @@ class EnergyOnlyNCA(torch.nn.Module):
         kernel = self.lap_kernel.repeat(self.chn, 1, 1, 1)     # depthwise, one Laplacian per channel
         return torch.nn.functional.conv2d(s_padded, kernel, groups=self.chn)
 
+
+    def _symmetric_kernel(self):
+        K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
+        return 0.5 * (self.K_raw + K_reflected)
+
+    def _spatial_field(self, s):
+        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
+        K = self._symmetric_kernel()
+        return torch.nn.functional.conv2d(s_padded, K) 
+        
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        J_sym = (self.W + self.W.T) / 2
-        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s)
+        h = self._spatial_field(s)
+        E_coupling = (-0.5 * (s * h).sum(dim=1)).sum(dim=[1, 2])
 
         b_bias = self.b.view(1, -1, 1, 1)
-        E_quadratic = (-0.5 * (s * Js).sum(dim=1)).sum(dim=[1, 2])
-        E_bias = (b_bias * s).sum(dim=1).sum(dim=[1, 2])     # reduced to (B,) — now matches E_quadratic's shape
-        E_hopfield = E_quadratic + E_bias
-
-        kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
-        lap = self._laplacian(s)
-        E_spatial = (0.5 * kappa * (s * (-lap))).sum(dim=1).sum(dim=[1, 2])
-
-        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
-        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)   # renamed — see note below
-        E_reaction = (-0.5 * a * s.pow(2) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
-
-        return E_hopfield + E_spatial + E_reaction
-
-    def energy_gradient(self, x):
-        s = x[:, :self.chn, ...]
-        J_sym = (self.W + self.W.T) / 2
-        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s)
-        grad_hopfield = -Js + self.b.view(1, -1, 1, 1)
-
-        kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
-        lap = self._laplacian(s)
-        grad_spatial = -kappa * lap
+        E_bias = (b_bias * s).sum(dim=1).sum(dim=[1, 2])
 
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        grad_reaction = -a * s + b_sat * s.pow(3)
+        E_reaction = (-0.5 * a * s.pow(2) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
 
-        return grad_hopfield + grad_spatial + grad_reaction
+        return E_coupling + E_bias + E_reaction
+
+    def energy_gradient(self, x):
+        s = x[:, :self.chn, ...]
+        h = self._spatial_field(s)
+        grad_coupling = -h
+        grad_bias = self.b.view(1, -1, 1, 1).expand_as(s) * 0 + self.b.view(1, -1, 1, 1)  # broadcasts correctly
+        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
+        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
+        grad_reaction = -a * s + b_sat * s.pow(3)
+        return grad_coupling + grad_bias + grad_reaction
         
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
