@@ -203,7 +203,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         grad_E = self.energy_gradient(x)
         correction = torch.zeros_like(x)
         correction[:, :self.chn] = -eta * grad_E
-        update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate).floor()
+        update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
         
         x_update = x + correction * update_mask * pre_life_mask
         v_part = x_update[:, :self.v_dim, ...]
