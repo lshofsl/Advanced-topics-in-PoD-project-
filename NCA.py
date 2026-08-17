@@ -155,6 +155,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
+        self.b = nn.Parameter(torch.zeros(chn)) #Bias term
 
         laplacian_kernel = torch.tensor([[0., 1., 0.],
                                           [1., -4., 1.],
@@ -172,40 +173,39 @@ class EnergyOnlyNCA(torch.nn.Module):
         return torch.nn.functional.conv2d(s_padded, kernel, groups=self.chn)
 
     def energy(self, x):
-        # Total energy — BOTH terms, since this is what mono/drift logging must reflect
         s = x[:, :self.chn, ...]
         J_sym = (self.W + self.W.T) / 2
         Js = torch.einsum('nm,bmhw->bnhw', J_sym, s)
-        E_hopfield = (-0.5 * (s * Js).sum(dim=1)).sum(dim=[1, 2])
+
+        b_bias = self.b.view(1, -1, 1, 1)
+        E_quadratic = (-0.5 * (s * Js).sum(dim=1)).sum(dim=[1, 2])
+        E_bias = (b_bias * s).sum(dim=1).sum(dim=[1, 2])     # reduced to (B,) — now matches E_quadratic's shape
+        E_hopfield = E_quadratic + E_bias
 
         kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
-        
-        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
-        # Dirichlet energy via unfold, or approximate directly from the Laplacian identity:
-        # sum_i sum_j (s_i-s_j)^2 = -2 * sum_i s_i . laplacian(s)_i  (up to the deg*s_i^2 self term)
         lap = self._laplacian(s)
         E_spatial = (0.5 * kappa * (s * (-lap))).sum(dim=1).sum(dim=[1, 2])
 
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
-        b = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        s = x[:, :self.chn, ...]
-        E_reaction = (-0.5 * a * s.pow(2) + 0.25 * b * s.pow(4)).sum(dim=1).sum(dim=[1,2])
+        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)   # renamed — see note below
+        E_reaction = (-0.5 * a * s.pow(2) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
+
         return E_hopfield + E_spatial + E_reaction
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
         J_sym = (self.W + self.W.T) / 2
         Js = torch.einsum('nm,bmhw->bnhw', J_sym, s)
-        grad_hopfield = -Js
+        grad_hopfield = -Js + self.b.view(1, -1, 1, 1)
 
         kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
         lap = self._laplacian(s)
         grad_spatial = -kappa * lap
 
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
-        b = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        s = x[:, :self.chn, ...]
-        grad_reaction = -a * s + b * s.pow(3)
+        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
+        grad_reaction = -a * s + b_sat * s.pow(3)
+
         return grad_hopfield + grad_spatial + grad_reaction
         
     def forward(self, x, update_rate=0.5):
@@ -220,9 +220,9 @@ class EnergyOnlyNCA(torch.nn.Module):
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
         x_update = x + correction * update_mask   # x itself is preserved when a cell isn't updated
 
-        #v_part = x_update[:, :self.v_dim, ...]
-        #h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
-        #x_update = torch.cat([v_part, h_part], dim=1)
+        v_part = x_update[:, :self.v_dim, ...]
+        h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
+        x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
         life_mask = (pre_life_mask & post_life_mask).float()   # AND, matching the reference implementation
