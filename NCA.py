@@ -150,28 +150,16 @@ class EnergyOnlyNCA(torch.nn.Module):
         super().__init__()
         self.chn = chn
         self.v_dim = v_dim
-        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-3)       # within-cell Hopfield term
-        self.log_kappa = torch.nn.Parameter(torch.full((chn,), -2.0))       # per-channel diffusion strength, starting in 0.0
+        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-3)  #
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
-        self.b = torch.nn.Parameter(torch.zeros(chn)) #Bias term
-
-        laplacian_kernel = torch.tensor([[0., 1., 0.],
-                                          [1., -4., 1.],
-                                          [0., 1., 0.]])
-        self.register_buffer('lap_kernel', laplacian_kernel.view(1, 1, 3, 3))
+        self.b = torch.nn.Parameter(torch.zeros(chn))  # Bias term
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
         padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
         return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
-
-    def _laplacian(self, s):
-        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
-        kernel = self.lap_kernel.repeat(self.chn, 1, 1, 1)     # depthwise, one Laplacian per channel
-        return torch.nn.functional.conv2d(s_padded, kernel, groups=self.chn)
-
 
     def _symmetric_kernel(self):
         K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
@@ -180,8 +168,8 @@ class EnergyOnlyNCA(torch.nn.Module):
     def _spatial_field(self, s):
         s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
         K = self._symmetric_kernel()
-        return torch.nn.functional.conv2d(s_padded, K) 
-        
+        return torch.nn.functional.conv2d(s_padded, K)
+
     def energy(self, x):
         s = x[:, :self.chn, ...]
         h = self._spatial_field(s)
@@ -200,32 +188,29 @@ class EnergyOnlyNCA(torch.nn.Module):
         s = x[:, :self.chn, ...]
         h = self._spatial_field(s)
         grad_coupling = -h
-        grad_bias = self.b.view(1, -1, 1, 1).expand_as(s) * 0 + self.b.view(1, -1, 1, 1)  # broadcasts correctly
+        grad_bias = self.b.view(1, -1, 1, 1)   # broadcasts against (B, chn, H, W) automatically
+
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         grad_reaction = -a * s + b_sat * s.pow(3)
+
         return grad_coupling + grad_bias + grad_reaction
-        
+
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
         b, c, h, w = x.shape
         eta = torch.nn.functional.softplus(self.log_eta)
-
         grad_E = self.energy_gradient(x)
         correction = torch.zeros_like(x)
         correction[:, :self.chn] = -eta * grad_E
-
         update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
-        x_update = x + correction * update_mask   # x itself is preserved when a cell isn't updated
-
+        x_update = x + correction * update_mask
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
-
         post_life_mask = self.get_alive_mask(x_update)
-        life_mask = (pre_life_mask & post_life_mask).float()   # AND, matching the reference implementation
+        life_mask = (pre_life_mask & post_life_mask).float()
         return x_update * life_mask
-
 
 
 class HYBRID_NCA(torch.nn.Module):
