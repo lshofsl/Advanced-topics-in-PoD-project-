@@ -152,7 +152,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.v_dim = v_dim
         self.W = torch.nn.Parameter(torch.zeros(chn, chn))          # within-cell Hopfield term
         self.log_kappa = torch.nn.Parameter(torch.full((chn,), -2.0))       # per-channel diffusion strength, starting in 0.0
-        self.log_eta = torch.nn.Parameter(torch.tensor(-2.0))
+        self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
 
