@@ -153,6 +153,8 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.W = torch.nn.Parameter(torch.zeros(chn, chn))          # within-cell Hopfield term
         self.log_kappa = torch.nn.Parameter(torch.full((chn,), -2.0))       # per-channel diffusion strength, starting in 0.0
         self.log_eta = torch.nn.Parameter(torch.tensor(-2.0))
+        self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))   # small positive a
+        self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
 
         laplacian_kernel = torch.tensor([[0., 1., 0.],
                                           [1., -4., 1.],
@@ -177,13 +179,18 @@ class EnergyOnlyNCA(torch.nn.Module):
         E_hopfield = (-0.5 * (s * Js).sum(dim=1)).sum(dim=[1, 2])
 
         kappa = torch.nn.functional.softplus(self.log_kappa).view(1, -1, 1, 1)
+        
         s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
         # Dirichlet energy via unfold, or approximate directly from the Laplacian identity:
         # sum_i sum_j (s_i-s_j)^2 = -2 * sum_i s_i . laplacian(s)_i  (up to the deg*s_i^2 self term)
         lap = self._laplacian(s)
         E_spatial = (0.5 * kappa * (s * (-lap))).sum(dim=1).sum(dim=[1, 2])
 
-        return E_hopfield + E_spatial
+        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
+        b = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
+        s = x[:, :self.chn, ...]
+        E_reaction = (-0.5 * a * s.pow(2) + 0.25 * b * s.pow(4)).sum(dim=1).sum(dim=[1,2])
+        return E_hopfield + E_spatial + E_reaction
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
@@ -195,7 +202,11 @@ class EnergyOnlyNCA(torch.nn.Module):
         lap = self._laplacian(s)
         grad_spatial = -kappa * lap
 
-        return grad_hopfield + grad_spatial
+        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
+        b = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
+        s = x[:, :self.chn, ...]
+        grad_reaction = -a * s + b * s.pow(3)
+        return grad_hopfield + grad_spatial + grad_reaction
         
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
