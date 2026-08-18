@@ -145,6 +145,7 @@ class GeneCA(torch.nn.Module):
         
 
 class EnergyOnlyNCA(torch.nn.Module):
+
     def __init__(self, chn=16, v_dim=4):
         super().__init__()
         self.chn = chn
@@ -152,39 +153,58 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.log_a = torch.nn.Parameter(torch.full((chn,), -1.0))
-        self.c = torch.nn.Parameter(torch.zeros(chn))         
+        self.c = torch.nn.Parameter(torch.zeros(chn))
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
         self.b = torch.nn.Parameter(torch.zeros(chn))
+
         self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))
-        self.register_buffer('K_hebb', torch.zeros(chn, chn, 3, 3))
-        self.register_buffer('K_boundary', torch.zeros(chn, chn, 3, 3))
+        self.register_buffer("K_hebb", torch.zeros(chn, chn, 3, 3))
+        self.register_buffer("K_boundary", torch.zeros(chn, chn, 3, 3))
         self.log_gamma_boundary = torch.nn.Parameter(torch.tensor(-2.0))
+        self.register_buffer("K_sobel", torch.zeros(chn, chn, 3, 3))
+        self.log_gamma_sobel = torch.nn.Parameter(torch.tensor(-2.0))
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
-        padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
-        return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
+        padded = torch.nn.functional.pad(
+            alpha, [1, 1, 1, 1], mode="circular"
+        )
+        return (
+            torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
+        )
 
     @torch.no_grad()
     def set_target_anchor(self, target):
-        t = target[:, :self.v_dim, ...]
+        t = target[:, : self.v_dim, ...]
         live = (t[:, 3:4] > 0.1).float()
         n_live = live.sum().clamp(min=1.0)
         n_pixels = live.shape[-1] * live.shape[-2]
 
-        offsets = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1)]
+        offsets = [
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 0),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ]
         K_hebb = torch.zeros_like(self.K_raw)
         K_boundary = torch.zeros_like(self.K_raw)
 
-        for (dy, dx) in offsets:
+        for dy, dx in offsets:
             shifted = torch.roll(t, shifts=(-dy, -dx), dims=(2, 3))
             shifted_live = torch.roll(live, shifts=(-dy, -dx), dims=(2, 3))
 
-            corr = torch.einsum('bnhw,bmhw,bohw->nm', t, shifted, live) / n_live
-            K_hebb[:self.v_dim, :self.v_dim, dy+1, dx+1] = corr
+            corr = (
+                torch.einsum("bnhw,bmhw,bohw->nm", t, shifted, live) / n_live
+            )
+            K_hebb[: self.v_dim, : self.v_dim, dy + 1, dx + 1] = corr
 
             corr_alpha = (live * shifted_live).sum() / n_pixels
-            K_boundary[3, 3, dy+1, dx+1] = corr_alpha
+            K_boundary[3, 3, dy + 1, dx + 1] = corr_alpha
 
         K_hebb_reflected = K_hebb.flip(dims=[2, 3]).transpose(0, 1)
         self.K_hebb.copy_(0.5 * (K_hebb + K_hebb_reflected))
@@ -192,12 +212,46 @@ class EnergyOnlyNCA(torch.nn.Module):
         K_boundary_reflected = K_boundary.flip(dims=[2, 3]).transpose(0, 1)
         self.K_boundary.copy_(0.5 * (K_boundary + K_boundary_reflected))
 
+        # FIXED: Ensure sobel tensors match device and dtype of self.K_raw
+        sobel_x = (
+            torch.tensor(
+                [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
+                device=self.K_raw.device,
+                dtype=self.K_raw.dtype,
+            )
+            / 8.0
+        )
+        sobel_y = sobel_x.T
+
+        K_sobel = torch.zeros_like(self.K_raw)
+        hidden_idx = self.v_dim
+
+        for v in range(self.v_dim):
+            if hidden_idx < self.chn:
+                K_sobel[hidden_idx, v] = sobel_x  # Horizontal gradient
+                hidden_idx += 1
+            if hidden_idx < self.chn:
+                K_sobel[hidden_idx, v] = sobel_y  # Vertical gradient
+                hidden_idx += 1
+
+        # Preserve spatial coupling symmetry
+        K_sobel_reflected = K_sobel.flip(dims=[2, 3]).transpose(0, 1)
+        self.K_sobel.copy_(0.5 * (K_sobel + K_sobel_reflected))
+
     def _symmetric_kernel(self):
         K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
         K_learned_sym = 0.5 * (self.K_raw + K_reflected)
+
         gamma = torch.nn.functional.softplus(self.log_gamma)
         gamma_boundary = torch.nn.functional.softplus(self.log_gamma_boundary)
-        return K_learned_sym + gamma * self.K_hebb + gamma_boundary * self.K_boundary
+        gamma_sobel = torch.nn.functional.softplus(self.log_gamma_sobel)
+
+        return (
+            K_learned_sym
+            + gamma * self.K_hebb
+            + gamma_boundary * self.K_boundary
+            + gamma_sobel * self.K_sobel
+        )
 
     def _spatial_field(self, s):
         s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
@@ -205,7 +259,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         return torch.nn.functional.conv2d(s_padded, K)
 
     def energy(self, x):
-        s = x[:, :self.chn, ...]
+        s = x[:, : self.chn, ...]
         h = self._spatial_field(s)
         E_coupling = (-0.5 * (s * h).sum(dim=1)).sum(dim=[1, 2])
 
@@ -215,12 +269,16 @@ class EnergyOnlyNCA(torch.nn.Module):
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         c = self.c.view(1, -1, 1, 1)
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        E_reaction = (-0.5 * a * s.pow(2) + (1/3) * c * s.pow(3) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
+        E_reaction = (
+            -0.5 * a * s.pow(2)
+            + (1 / 3) * c * s.pow(3)
+            + 0.25 * b_sat * s.pow(4)
+        ).sum(dim=1).sum(dim=[1, 2])
 
         return E_coupling + E_bias + E_reaction
 
     def energy_gradient(self, x):
-        s = x[:, :self.chn, ...]
+        s = x[:, : self.chn, ...]
         h = self._spatial_field(s)
         grad_coupling = -h
         grad_bias = self.b.view(1, -1, 1, 1)
@@ -234,17 +292,23 @@ class EnergyOnlyNCA(torch.nn.Module):
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
-        batch_n, chn_n, h, w = x.shape   # renamed to avoid shadowing self.c / a local `b`
+        batch_n, chn_n, h, w = x.shape
         eta = torch.nn.functional.softplus(self.log_eta)
         grad_E = self.energy_gradient(x)
         correction = torch.zeros_like(x)
-        correction[:, :self.chn] = -eta * grad_E
-        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate)
+        correction[:, : self.chn] = -eta * grad_E
+        update_mask = (
+            torch.rand(batch_n, 1, h, w, device=x.device) < update_rate
+        )
 
         x_update = x + correction * update_mask * pre_life_mask
         post_life_mask = self.get_alive_mask(x_update)
         life_mask = (pre_life_mask & post_life_mask).float()
         return x_update * life_mask
+
+
+
+
 
 class HYBRID_NCA(torch.nn.Module):
     def __init__(self, chn=16, hidden_n=96):
