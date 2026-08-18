@@ -151,11 +151,11 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.v_dim = v_dim
         self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
-        self.log_a = torch.nn.Parameter(torch.full(chn))
-        elf.log_c = torch.nn.Parameter(torch.full(chn))
-        self.log_b = torch.nn.Parameter(torch.full(chn))
+        self.log_a = torch.nn.Parameter(torch.full((chn,), -1.0))
+        self.c = torch.nn.Parameter(torch.zeros(chn))         
+        self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
         self.b = torch.nn.Parameter(torch.zeros(chn))
-        self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))   # was missing entirely
+        self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))
         self.register_buffer('K_hebb', torch.zeros(chn, chn, 3, 3))
         self.register_buffer('K_boundary', torch.zeros(chn, chn, 3, 3))
         self.log_gamma_boundary = torch.nn.Parameter(torch.tensor(-2.0))
@@ -167,15 +167,6 @@ class EnergyOnlyNCA(torch.nn.Module):
 
     @torch.no_grad()
     def set_target_anchor(self, target):
-        """
-        target: (1, 4, H, W) — visible RGBA only.
-        Builds two fixed kernels from the target:
-          - K_hebb: RGBA co-occurrence correlation (interior texture),
-            zero at hidden-channel rows/cols since there's no ground truth for them.
-          - K_boundary: alpha-mask self-correlation per offset direction,
-            which — unlike K_hebb — stays nonzero at edges, since it correlates
-            live/dead contrast rather than RGBA values that vanish at background.
-        """
         t = target[:, :self.v_dim, ...]
         live = (t[:, 3:4] > 0.1).float()
         n_live = live.sum().clamp(min=1.0)
@@ -201,8 +192,6 @@ class EnergyOnlyNCA(torch.nn.Module):
         K_boundary_reflected = K_boundary.flip(dims=[2, 3]).transpose(0, 1)
         self.K_boundary.copy_(0.5 * (K_boundary + K_boundary_reflected))
 
-
-
     def _symmetric_kernel(self):
         K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
         K_learned_sym = 0.5 * (self.K_raw + K_reflected)
@@ -222,9 +211,11 @@ class EnergyOnlyNCA(torch.nn.Module):
 
         b_bias = self.b.view(1, -1, 1, 1)
         E_bias = (b_bias * s).sum(dim=1).sum(dim=[1, 2])
+
+        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         c = self.c.view(1, -1, 1, 1)
-        
-        E_reaction = (-0.5 * a * s.pow(2) + (1/3) * c * s.pow(3) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1,2])
+        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
+        E_reaction = (-0.5 * a * s.pow(2) + (1/3) * c * s.pow(3) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
 
         return E_coupling + E_bias + E_reaction
 
@@ -234,29 +225,26 @@ class EnergyOnlyNCA(torch.nn.Module):
         grad_coupling = -h
         grad_bias = self.b.view(1, -1, 1, 1)
 
+        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         c = self.c.view(1, -1, 1, 1)
+        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
 
         return grad_coupling + grad_bias + grad_reaction
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
-        b, c, h, w = x.shape
+        batch_n, chn_n, h, w = x.shape   # renamed to avoid shadowing self.c / a local `b`
         eta = torch.nn.functional.softplus(self.log_eta)
         grad_E = self.energy_gradient(x)
         correction = torch.zeros_like(x)
         correction[:, :self.chn] = -eta * grad_E
-        update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
+        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate)
 
         x_update = x + correction * update_mask * pre_life_mask
-        #v_part = x_update[:, :self.v_dim, ...]
-        #h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
-        #x_update = torch.cat([v_part, h_part], dim=1)
-
         post_life_mask = self.get_alive_mask(x_update)
-        life_mask = (pre_life_mask & post_life_mask).float()   # restored AND convention
+        life_mask = (pre_life_mask & post_life_mask).float()
         return x_update * life_mask
-
 
 class HYBRID_NCA(torch.nn.Module):
     def __init__(self, chn=16, hidden_n=96):
