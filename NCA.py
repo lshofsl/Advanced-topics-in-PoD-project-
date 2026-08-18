@@ -166,12 +166,8 @@ class EnergyOnlyNCA(torch.nn.Module):
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
-        padded = torch.nn.functional.pad(
-            alpha, [1, 1, 1, 1], mode="circular"
-        )
-        return (
-            torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
-        )
+        padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
+        return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1)
 
     @torch.no_grad()
     def set_target_anchor(self, target):
@@ -261,10 +257,9 @@ class EnergyOnlyNCA(torch.nn.Module):
         return torch.nn.functional.conv2d(s_padded, K)
 
     def energy(self, x):
-        alpha = x[:, 3:4, ...]
         s = x[:, : self.chn, ...]
-        mask = (alpha > 0.1).float()
-
+        mask = live_mask = self.get_alive_mask(x).to(x.dtype)
+        
         h = self._spatial_field(s, mask)
         E_coupling = (-0.5 * (s * h).sum(dim=1)).sum(dim=[1, 2])
 
@@ -279,34 +274,29 @@ class EnergyOnlyNCA(torch.nn.Module):
             + (1 / 3) * c * s.pow(3)
             + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
 
-        E_background_penalty = 0.001 * ((1.0 - alpha) * s.pow(2)).sum(dim=[1, 2, 3])
-
+        E_background_penalty = 0.001 * ((1.0 - mask) * s.pow(2)).sum(dim=[1, 2, 3])
         return E_coupling + E_bias + E_reaction + E_background_penalty
 
 
+    
     def energy_gradient(self, x):
-        alpha = x[:, 3:4, ...]
         s = x[:, : self.chn, ...]
-        mask = (alpha > 0.1).float()
+        mask = self.get_alive_mask(x).to(x.dtype)
 
-        h = self._spatial_field(s, mask)
-        grad_coupling = -h
+        h_masked = self._spatial_field(s, mask)                                      # A(Ms)
+        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
+        h_unmasked = torch.nn.functional.conv2d(s_padded, self._symmetric_kernel())  # A(s)
+        grad_coupling = -0.5 * (h_masked + mask * h_unmasked)
+
         grad_bias = self.b.view(1, -1, 1, 1)
-
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         c = self.c.view(1, -1, 1, 1)
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
 
-        grad_background_penalty = 0.002 * (1.0 - alpha) * s
+        grad_background_penalty = 0.002 * (1.0 - mask) * s   # same mask, no cross-term needed
 
-        total_grad = (
-            grad_coupling
-            + grad_bias
-            + grad_reaction
-            + grad_background_penalty)
-
-        # Clamp gradient norm to prevent forward step explosion
+        total_grad = grad_coupling + grad_bias + grad_reaction + grad_background_penalty
         return torch.clamp(total_grad, -1.0, 1.0)
 
     def forward(self, x, update_rate=0.5):
