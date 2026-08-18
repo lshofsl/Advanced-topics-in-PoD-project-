@@ -253,14 +253,20 @@ class EnergyOnlyNCA(torch.nn.Module):
             + gamma_sobel * self.K_sobel
         )
 
-    def _spatial_field(self, s):
-        s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
+    def _spatial_field(self, s, mask):
+        s_masked = s * mask
+        s_padded = torch.nn.functional.pad(
+            s_masked, [1, 1, 1, 1], mode="circular"
+        )
         K = self._symmetric_kernel()
         return torch.nn.functional.conv2d(s_padded, K)
 
     def energy(self, x):
+        alpha = x[:, 3:4, ...]
         s = x[:, : self.chn, ...]
-        h = self._spatial_field(s)
+        mask = (alpha > 0.1).float()
+
+        h = self._spatial_field(s, mask)
         E_coupling = (-0.5 * (s * h).sum(dim=1)).sum(dim=[1, 2])
 
         b_bias = self.b.view(1, -1, 1, 1)
@@ -275,11 +281,18 @@ class EnergyOnlyNCA(torch.nn.Module):
             + 0.25 * b_sat * s.pow(4)
         ).sum(dim=1).sum(dim=[1, 2])
 
-        return E_coupling + E_bias + E_reaction
+        # Penalty term to keep dead/background pixels at zero state
+        E_background_penalty = ((1.0 - alpha) * s.pow(2)).sum(dim=[1, 2, 3])
+
+        return E_coupling + E_bias + E_reaction + 10.0 * E_background_penalty
 
     def energy_gradient(self, x):
+        alpha = x[:, 3:4, ...]
         s = x[:, : self.chn, ...]
-        h = self._spatial_field(s)
+        mask = (alpha > 0.1).float()
+
+        # Pass mask to spatial field so gradient matches energy definition
+        h = self._spatial_field(s, mask)
         grad_coupling = -h
         grad_bias = self.b.view(1, -1, 1, 1)
 
@@ -288,7 +301,15 @@ class EnergyOnlyNCA(torch.nn.Module):
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
 
-        return grad_coupling + grad_bias + grad_reaction
+        # Analytical derivative of 10.0 * (1.0 - alpha) * s^2 w.r.t s
+        grad_background_penalty = 20.0 * (1.0 - alpha) * s
+
+        return (
+            grad_coupling
+            + grad_bias
+            + grad_reaction
+            + grad_background_penalty
+        )
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
