@@ -167,7 +167,7 @@ class EnergyOnlyNCA(torch.nn.Module):
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
         padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
-        return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1)
+        return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
 
     @torch.no_grad()
     def set_target_anchor(self, target):
