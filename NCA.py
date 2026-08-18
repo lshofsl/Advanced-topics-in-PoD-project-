@@ -157,17 +157,46 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
         self.b = torch.nn.Parameter(torch.zeros(chn))
 
-        self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))
+        self.log_gamma = torch.nn.Parameter(torch.tensor(-1.0))
         self.register_buffer("K_hebb", torch.zeros(chn, chn, 3, 3))
         self.register_buffer("K_boundary", torch.zeros(chn, chn, 3, 3))
-        self.log_gamma_boundary = torch.nn.Parameter(torch.tensor(-2.0))
+        self.log_gamma_boundary = torch.nn.Parameter(torch.tensor(-1.0))
         self.register_buffer("K_sobel", torch.zeros(chn, chn, 3, 3))
-        self.log_gamma_sobel = torch.nn.Parameter(torch.tensor(-2.0))
+        self.log_gamma_sobel = torch.nn.Parameter(torch.tensor(-1.0))
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
         padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
         return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
+
+    def estimate_spectral_radius(self, num_iters=5, spatial_size=16):
+        K = self._symmetric_kernel()
+        eta = torch.nn.functional.softplus(self.log_eta)
+        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
+
+        if not hasattr(self, "_pi_vec") or self._pi_vec.shape[1] != self.chn:
+            v = torch.randn(1, self.chn, spatial_size, spatial_size, device=K.device)
+            v = v / (v.norm() + 1e-8)
+        else:
+            v = self._pi_vec
+
+        def apply_op(v):
+            v_padded = torch.nn.functional.pad(v, [1, 1, 1, 1], mode="circular")
+            Av = torch.nn.functional.conv2d(v_padded, K)
+            return v + eta * Av + eta * a * v   # linearized forward-Euler step at s≈0, mask≈1
+
+        for i in range(num_iters):
+            Av = apply_op(v)
+            v_new = Av / (Av.norm() + 1e-8)
+            v = v_new if i == num_iters - 1 else v_new.detach()
+
+        Av = apply_op(v)
+        eigenvalue_est = Av.norm() / (v.norm() + 1e-8)
+
+        self._pi_vec = v.detach()
+        return eigenvalue_est
+
+
 
     @torch.no_grad()
     def set_target_anchor(self, target):
