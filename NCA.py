@@ -151,9 +151,9 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.v_dim = v_dim
         self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
-        self.log_a = torch.nn.Parameter(torch.full((chn,)))
-        elf.log_c = torch.nn.Parameter(torch.full((chn,)))
-        self.log_b = torch.nn.Parameter(torch.full((chn,)))
+        self.log_a = torch.nn.Parameter(torch.full(chn))
+        elf.log_c = torch.nn.Parameter(torch.full(chn))
+        self.log_b = torch.nn.Parameter(torch.full(chn))
         self.b = torch.nn.Parameter(torch.zeros(chn))
         self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))   # was missing entirely
         self.register_buffer('K_hebb', torch.zeros(chn, chn, 3, 3))
