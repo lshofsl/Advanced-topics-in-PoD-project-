@@ -166,15 +166,15 @@ class EnergyOnlyNCA(torch.nn.Module):
 
     @torch.no_grad()
     def set_target_anchor(self, target):
-    """
-    target: (1, 4, H, W) — visible RGBA only.
-    Builds two fixed kernels from the target:
-      - K_hebb: RGBA co-occurrence correlation (interior texture),
-        zero at hidden-channel rows/cols since there's no ground truth for them.
-      - K_boundary: alpha-mask self-correlation per offset direction,
-        which — unlike K_hebb — stays nonzero at edges, since it correlates
-        live/dead contrast rather than RGBA values that vanish at background.
-    """
+        """
+        target: (1, 4, H, W) — visible RGBA only.
+        Builds two fixed kernels from the target:
+          - K_hebb: RGBA co-occurrence correlation (interior texture),
+            zero at hidden-channel rows/cols since there's no ground truth for them.
+          - K_boundary: alpha-mask self-correlation per offset direction,
+            which — unlike K_hebb — stays nonzero at edges, since it correlates
+            live/dead contrast rather than RGBA values that vanish at background.
+        """
         t = target[:, :self.v_dim, ...]
         live = (t[:, 3:4] > 0.1).float()
         n_live = live.sum().clamp(min=1.0)
