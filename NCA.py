@@ -156,6 +156,8 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.b = torch.nn.Parameter(torch.zeros(chn))
         self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))   # was missing entirely
         self.register_buffer('K_hebb', torch.zeros(chn, chn, 3, 3))
+        self.register_buffer('K_boundary', torch.zeros(chn, chn, 3, 3))
+        self.log_gamma_boundary = torch.nn.Parameter(torch.tensor(-2.0))
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
@@ -164,32 +166,48 @@ class EnergyOnlyNCA(torch.nn.Module):
 
     @torch.no_grad()
     def set_target_anchor(self, target):
-        """
-        target: (1, 4, H, W) — visible RGBA only.
-        Builds a fixed Hebbian kernel from visible-channel correlations;
-        rows/cols involving hidden channels stay at zero.
-        """
+    """
+    target: (1, 4, H, W) — visible RGBA only.
+    Builds two fixed kernels from the target:
+      - K_hebb: RGBA co-occurrence correlation (interior texture),
+        zero at hidden-channel rows/cols since there's no ground truth for them.
+      - K_boundary: alpha-mask self-correlation per offset direction,
+        which — unlike K_hebb — stays nonzero at edges, since it correlates
+        live/dead contrast rather than RGBA values that vanish at background.
+    """
         t = target[:, :self.v_dim, ...]
         live = (t[:, 3:4] > 0.1).float()
         n_live = live.sum().clamp(min=1.0)
+        n_pixels = live.shape[-1] * live.shape[-2]
 
         offsets = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1)]
         K_hebb = torch.zeros_like(self.K_raw)
+        K_boundary = torch.zeros_like(self.K_raw)
 
         for (dy, dx) in offsets:
             shifted = torch.roll(t, shifts=(-dy, -dx), dims=(2, 3))
+            shifted_live = torch.roll(live, shifts=(-dy, -dx), dims=(2, 3))
+
             corr = torch.einsum('bnhw,bmhw,bohw->nm', t, shifted, live) / n_live
             K_hebb[:self.v_dim, :self.v_dim, dy+1, dx+1] = corr
 
+            corr_alpha = (live * shifted_live).sum() / n_pixels
+            K_boundary[3, 3, dy+1, dx+1] = corr_alpha
+
         K_hebb_reflected = K_hebb.flip(dims=[2, 3]).transpose(0, 1)
-        K_hebb_sym = 0.5 * (K_hebb + K_hebb_reflected)
-        self.K_hebb.copy_(K_hebb_sym)
+        self.K_hebb.copy_(0.5 * (K_hebb + K_hebb_reflected))
+
+        K_boundary_reflected = K_boundary.flip(dims=[2, 3]).transpose(0, 1)
+        self.K_boundary.copy_(0.5 * (K_boundary + K_boundary_reflected))
+
+
 
     def _symmetric_kernel(self):
         K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
         K_learned_sym = 0.5 * (self.K_raw + K_reflected)
         gamma = torch.nn.functional.softplus(self.log_gamma)
-        return K_learned_sym + gamma * self.K_hebb
+        gamma_boundary = torch.nn.functional.softplus(self.log_gamma_boundary)
+        return K_learned_sym + gamma * self.K_hebb + gamma_boundary * self.K_boundary
 
     def _spatial_field(self, s):
         s_padded = torch.nn.functional.pad(s, [1, 1, 1, 1], mode="circular")
