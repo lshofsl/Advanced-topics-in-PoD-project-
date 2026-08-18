@@ -212,7 +212,6 @@ class EnergyOnlyNCA(torch.nn.Module):
         K_boundary_reflected = K_boundary.flip(dims=[2, 3]).transpose(0, 1)
         self.K_boundary.copy_(0.5 * (K_boundary + K_boundary_reflected))
 
-        # FIXED: Ensure sobel tensors match device and dtype of self.K_raw
         sobel_x = (
             torch.tensor(
                 [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
@@ -280,8 +279,7 @@ class EnergyOnlyNCA(torch.nn.Module):
             + (1 / 3) * c * s.pow(3)
             + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
 
-        # Reduced penalty factor: 0.1 instead of 10.0
-        E_background_penalty = 0.1 * ((1.0 - alpha) * s.pow(2)).sum(dim=[1, 2, 3])
+        E_background_penalty = 0.001 * ((1.0 - alpha) * s.pow(2)).sum(dim=[1, 2, 3])
 
         return E_coupling + E_bias + E_reaction + E_background_penalty
 
@@ -300,8 +298,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
 
-        # Gradient corresponding to 0.1 * (1.0 - alpha) * s^2
-        grad_background_penalty = 0.2 * (1.0 - alpha) * s
+        grad_background_penalty = 0.002 * (1.0 - alpha) * s
 
         total_grad = (
             grad_coupling
