@@ -151,8 +151,9 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.v_dim = v_dim
         self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
-        self.log_a = torch.nn.Parameter(torch.full((chn,), -3.0))
-        self.log_b = torch.nn.Parameter(torch.full((chn,), -1.0))
+        self.log_a = torch.nn.Parameter(torch.full((chn,)))
+        elf.log_c = torch.nn.Parameter(torch.full((chn,)))
+        self.log_b = torch.nn.Parameter(torch.full((chn,)))
         self.b = torch.nn.Parameter(torch.zeros(chn))
         self.log_gamma = torch.nn.Parameter(torch.tensor(-2.0))   # was missing entirely
         self.register_buffer('K_hebb', torch.zeros(chn, chn, 3, 3))
@@ -221,10 +222,9 @@ class EnergyOnlyNCA(torch.nn.Module):
 
         b_bias = self.b.view(1, -1, 1, 1)
         E_bias = (b_bias * s).sum(dim=1).sum(dim=[1, 2])
-
-        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
-        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        E_reaction = (-0.5 * a * s.pow(2) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
+        c = self.c.view(1, -1, 1, 1)
+        
+        E_reaction = (-0.5 * a * s.pow(2) + (1/3) * c * s.pow(3) + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1,2])
 
         return E_coupling + E_bias + E_reaction
 
@@ -234,9 +234,8 @@ class EnergyOnlyNCA(torch.nn.Module):
         grad_coupling = -h
         grad_bias = self.b.view(1, -1, 1, 1)
 
-        a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
-        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        grad_reaction = -a * s + b_sat * s.pow(3)
+        c = self.c.view(1, -1, 1, 1)
+        grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
 
         return grad_coupling + grad_bias + grad_reaction
 
