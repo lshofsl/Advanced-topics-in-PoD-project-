@@ -278,20 +278,19 @@ class EnergyOnlyNCA(torch.nn.Module):
         E_reaction = (
             -0.5 * a * s.pow(2)
             + (1 / 3) * c * s.pow(3)
-            + 0.25 * b_sat * s.pow(4)
-        ).sum(dim=1).sum(dim=[1, 2])
+            + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
 
-        # Penalty term to keep dead/background pixels at zero state
-        E_background_penalty = ((1.0 - alpha) * s.pow(2)).sum(dim=[1, 2, 3])
+        # Reduced penalty factor: 0.1 instead of 10.0
+        E_background_penalty = 0.1 * ((1.0 - alpha) * s.pow(2)).sum(dim=[1, 2, 3])
 
-        return E_coupling + E_bias + E_reaction + 10.0 * E_background_penalty
+        return E_coupling + E_bias + E_reaction + E_background_penalty
+
 
     def energy_gradient(self, x):
         alpha = x[:, 3:4, ...]
         s = x[:, : self.chn, ...]
         mask = (alpha > 0.1).float()
 
-        # Pass mask to spatial field so gradient matches energy definition
         h = self._spatial_field(s, mask)
         grad_coupling = -h
         grad_bias = self.b.view(1, -1, 1, 1)
@@ -301,15 +300,17 @@ class EnergyOnlyNCA(torch.nn.Module):
         b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
 
-        # Analytical derivative of 10.0 * (1.0 - alpha) * s^2 w.r.t s
-        grad_background_penalty = 20.0 * (1.0 - alpha) * s
+        # Gradient corresponding to 0.1 * (1.0 - alpha) * s^2
+        grad_background_penalty = 0.2 * (1.0 - alpha) * s
 
-        return (
+        total_grad = (
             grad_coupling
             + grad_bias
             + grad_reaction
-            + grad_background_penalty
-        )
+            + grad_background_penalty)
+
+        # Clamp gradient norm to prevent forward step explosion
+        return torch.clamp(total_grad, -1.0, 1.0)
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
