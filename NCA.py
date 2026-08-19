@@ -196,6 +196,11 @@ class EnergyOnlyNCA(torch.nn.Module):
         self._pi_vec = v.detach()
         return eigenvalue_est
 
+    def _dihedral_symmetrize(self, K):
+        Kt = K.transpose(2, 3)  # reflect across the main diagonal
+        transforms = [torch.rot90(base, k, dims=[2, 3]) for base in (K, Kt) for k in range(4)]
+        return sum(transforms) / 8.0
+
 
 
     @torch.no_grad()
@@ -205,17 +210,8 @@ class EnergyOnlyNCA(torch.nn.Module):
         n_live = live.sum().clamp(min=1.0)
         n_pixels = live.shape[-1] * live.shape[-2]
 
-        offsets = [
-            (-1, -1),
-            (-1, 0),
-            (-1, 1),
-            (0, -1),
-            (0, 0),
-            (0, 1),
-            (1, -1),
-            (1, 0),
-            (1, 1),
-        ]
+        offsets = [(-1, -1),(-1, 0),(-1, 1),
+            (0, -1),(0, 0),(0, 1),(1, -1),(1, 0),(1, 1),]
         K_hebb = torch.zeros_like(self.K_raw)
         K_boundary = torch.zeros_like(self.K_raw)
 
@@ -264,7 +260,8 @@ class EnergyOnlyNCA(torch.nn.Module):
 
     def _symmetric_kernel(self):
         K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
-        K_learned_sym = 0.5 * (self.K_raw + K_reflected)
+        K_learned_sym = 0.5 * (self.K_raw + K_reflected)   # existing self-adjointness (Hopfield) constraint
+        K_learned_sym = self._dihedral_symmetrize(K_learned_sym)  # NEW: remove directional bias
 
         gamma = torch.nn.functional.softplus(self.log_gamma)
         gamma_boundary = torch.nn.functional.softplus(self.log_gamma_boundary)
@@ -274,7 +271,7 @@ class EnergyOnlyNCA(torch.nn.Module):
             K_learned_sym
             + gamma * self.K_hebb
             + gamma_boundary * self.K_boundary
-            + gamma_sobel * self.K_sobel
+            + gamma_sobel * self.K_sobel   # left untouched — directionality is the point
         )
 
     def _spatial_field(self, s, mask):
