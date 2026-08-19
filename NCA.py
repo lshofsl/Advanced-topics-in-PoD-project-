@@ -150,17 +150,15 @@ class EnergyOnlyNCA(torch.nn.Module):
         super().__init__()
         self.chn = chn
         self.v_dim = v_dim
-        self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
+        P = 3 * chn
+        self.W_raw = torch.nn.Parameter(torch.randn(P, P) * 1e-2)   # replaces K_raw entirely
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
-        self.b = torch.nn.Parameter(torch.zeros(chn))
-        self.log_beta = torch.nn.Parameter(torch.tensor(-1.0))   
-
-        self.log_gamma = torch.nn.Parameter(torch.tensor(-1.0))
-        self.register_buffer("K_hebb", torch.zeros(chn, chn, 3, 3))
-        self.register_buffer("K_boundary", torch.zeros(chn, chn, 3, 3))
-        self.log_gamma_boundary = torch.nn.Parameter(torch.tensor(-1.0))
-        self.register_buffer("K_sobel", torch.zeros(chn, chn, 3, 3))
-        self.log_gamma_sobel = torch.nn.Parameter(torch.tensor(-1.0))
+        self.b = torch.nn.Parameter(torch.zeros(P))                  # now P-dim, matches perception space
+        self.log_beta = torch.nn.Parameter(torch.tensor(0.0))        # steepness for f(p)
+        self.log_beta_s = torch.nn.Parameter(torch.tensor(0.0))      # separate steepness for reaction on s
+        sobel_x = torch.tensor([[-1.,0.,1.],[-2.,0.,2.],[-1.,0.,1.]]) / 8.0
+        self.register_buffer("Kx", sobel_x.view(1,1,3,3).repeat(chn,1,1,1))
+        self.register_buffer("Ky", sobel_x.T.view(1,1,3,3).repeat(chn,1,1,1))
 
     
     def get_alive_mask(self, x):
@@ -168,156 +166,68 @@ class EnergyOnlyNCA(torch.nn.Module):
         padded = torch.nn.functional.pad(alpha, [1, 1, 1, 1], mode="circular")
         return torch.nn.functional.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
 
-    def estimate_spectral_radius(self, num_iters=5, spatial_size=16):
-        K = self._symmetric_kernel()
-        eta = torch.nn.functional.softplus(self.log_eta)
-        beta = torch.nn.functional.softplus(self.log_beta)   # replaces `a` entirely
-
-        if not hasattr(self, "_pi_vec") or self._pi_vec.shape[1] != self.chn:
-            v = torch.randn(1, self.chn, spatial_size, spatial_size, device=K.device)
-            v = v / (v.norm() + 1e-8)
-        else:
-            v = self._pi_vec
-
-        def apply_op(v):
-            v_padded = torch.nn.functional.pad(v, [1, 1, 1, 1], mode="circular")
-            Av = torch.nn.functional.conv2d(v_padded, K)
-            return (1 - eta * beta) * v + eta * (beta ** 2) * Av
-
-        for i in range(num_iters):
-            Av = apply_op(v)
-            v_new = Av / (Av.norm() + 1e-8)
-            v = v_new if i == num_iters - 1 else v_new.detach()
-
-        Av = apply_op(v)
-        eigenvalue_est = Av.norm() / (v.norm() + 1e-8)
-        self._pi_vec = v.detach()
-        return eigenvalue_est
-
 
     def _dihedral_symmetrize(self, K):
         Kt = K.transpose(2, 3)  # reflect across the main diagonal
         transforms = [torch.rot90(base, k, dims=[2, 3]) for base in (K, Kt) for k in range(4)]
         return sum(transforms) / 8.0
 
+    def perceive(self, s):
+        s_padded = torch.nn.functional.pad(s, [1,1,1,1], mode="circular")
+        sx = torch.nn.functional.conv2d(s_padded, self.Kx, groups=self.chn)
+        sy = torch.nn.functional.conv2d(s_padded, self.Ky, groups=self.chn)
+        return torch.cat([s, sx, sy], dim=1)
 
-
-    @torch.no_grad()
-    def set_target_anchor(self, target, hebb_channels=16):
-        n = hebb_channels 
-        t = target[:, :n, ...]
-        live = (t[:, 3:4] > 0.1).float()
-        n_live = live.sum().clamp(min=1.0)
-        n_pixels = live.shape[-1] * live.shape[-2]
-
-        offsets = [(-1, -1),(-1, 0),(-1, 1),
-            (0, -1),(0, 0),(0, 1),(1, -1),(1, 0),(1, 1),]
-        K_hebb = torch.zeros_like(self.K_raw)
-        K_boundary = torch.zeros_like(self.K_raw)
-
-        for dy, dx in offsets:
-            shifted = torch.roll(t, shifts=(-dy, -dx), dims=(2, 3))
-            shifted_live = torch.roll(live, shifts=(-dy, -dx), dims=(2, 3))
-            corr = torch.einsum("bnhw,bmhw,bohw->nm", t, shifted, live) / n_live
-            K_hebb[:n, :n, dy + 1, dx + 1] = corr 
-
-            corr_alpha = (live * shifted_live).sum() / n_pixels
-            K_boundary[3, 3, dy + 1, dx + 1] = corr_alpha
-
-        K_hebb_reflected = K_hebb.flip(dims=[2, 3]).transpose(0, 1)
-        self.K_hebb.copy_(0.5 * (K_hebb + K_hebb_reflected))
-
-        K_boundary_reflected = K_boundary.flip(dims=[2, 3]).transpose(0, 1)
-        self.K_boundary.copy_(0.5 * (K_boundary + K_boundary_reflected))
-
-        sobel_x = (
-            torch.tensor(
-                [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
-                device=self.K_raw.device,
-                dtype=self.K_raw.dtype,
-            )
-            / 8.0
-        )
-        sobel_y = sobel_x.T
-
-        K_sobel = torch.zeros_like(self.K_raw)
-        hidden_idx = self.v_dim
-
-        for v in range(self.v_dim):
-            if hidden_idx < self.chn:
-                K_sobel[hidden_idx, v] = sobel_x  # Horizontal gradient
-                hidden_idx += 1
-            if hidden_idx < self.chn:
-                K_sobel[hidden_idx, v] = sobel_y  # Vertical gradient
-                hidden_idx += 1
-
-        # Preserve spatial coupling symmetry
-        K_sobel_reflected = K_sobel.flip(dims=[2, 3]).transpose(0, 1)
-        self.K_sobel.copy_(0.5 * (K_sobel + K_sobel_reflected))
-
-    def _symmetric_kernel(self):
-        K_reflected = self.K_raw.flip(dims=[2, 3]).transpose(0, 1)
-        K_learned_sym = 0.5 * (self.K_raw + K_reflected)   # existing self-adjointness (Hopfield) constraint
-        K_learned_sym = self._dihedral_symmetrize(K_learned_sym)  # NEW: remove directional bias
-
-        gamma = torch.nn.functional.softplus(self.log_gamma)
-        gamma_boundary = torch.nn.functional.softplus(self.log_gamma_boundary)
-        gamma_sobel = torch.nn.functional.softplus(self.log_gamma_sobel)
-
-        return (
-            K_learned_sym
-            + gamma * self.K_hebb
-            + gamma_boundary * self.K_boundary
-            + gamma_sobel * self.K_sobel   # left untouched — directionality is the point
-        )
-
-    def _spatial_field(self, s, mask):
-        s_masked = s * mask
-        s_padded = torch.nn.functional.pad(
-            s_masked, [1, 1, 1, 1], mode="circular"
-        )
-        K = self._symmetric_kernel()
-        return torch.nn.functional.conv2d(s_padded, K)
+    def _symmetric_W(self):
+        return 0.5 * (self.W_raw + self.W_raw.T)
 
     def energy(self, x):
-        s = x[:, : self.chn, ...]
+        s = x[:, :self.chn, ...]
         mask = self.get_alive_mask(x).to(x.dtype)
+        beta = torch.nn.functional.softplus(self.log_beta)
+        beta_s = torch.nn.functional.softplus(self.log_beta_s)
 
-        beta = torch.nn.functional.softplus(self.log_beta)   
-        f = torch.tanh(beta * s)                            
+        p = self.perceive(s)
+        f = torch.tanh(beta * p) * mask
+        Wf = torch.einsum('ij,bjhw->bihw', self._symmetric_W(), f)
+        E_coupling = (-0.5 * (f * Wf).sum(dim=1)).sum(dim=[1, 2])
+        E_bias = -(self.b.view(1, -1, 1, 1) * f).sum(dim=1).sum(dim=[1, 2])
 
-        h = self._spatial_field(f, mask)                    
-        E_coupling = (-0.5 * (f * h).sum(dim=1)).sum(dim=[1, 2])
-
-        b_bias = self.b.view(1, -1, 1, 1)
-        E_bias = -(b_bias * f).sum(dim=1).sum(dim=[1, 2])  
-
-        phi = s * f - s + (1.0 / beta) * torch.log(1.0 + f)    
+        fs = torch.tanh(beta_s * s)
+        phi = s * fs - s + (1.0 / beta_s) * torch.log(1.0 + fs)
         E_reaction = phi.sum(dim=1).sum(dim=[1, 2])
 
         E_background_penalty = 0.001 * ((1.0 - mask) * s.pow(2)).sum(dim=[1, 2, 3])
         return E_coupling + E_bias + E_reaction + E_background_penalty
-    
+
     def energy_gradient(self, x):
-        s = x[:, : self.chn, ...]
+        s = x[:, :self.chn, ...]
         mask = self.get_alive_mask(x).to(x.dtype)
-
         beta = torch.nn.functional.softplus(self.log_beta)
-        f = torch.tanh(beta * s)
-        f_prime = beta * (1 - f**2)          # f'(s), reused across all three terms below
+        beta_s = torch.nn.functional.softplus(self.log_beta_s)
+        W = self._symmetric_W()
 
-        h = self._spatial_field(f, mask)                                              
-        f_padded = torch.nn.functional.pad(f, [1, 1, 1, 1], mode="circular")
-        h_unmasked = torch.nn.functional.conv2d(f_padded, self._symmetric_kernel())    
-        grad_coupling = -0.5 * (h + mask * h_unmasked) * f_prime                     
-        b_bias = self.b.view(1, -1, 1, 1)
-        grad_bias = -b_bias * f_prime                                              
-        grad_reaction = s * f_prime
+        p = self.perceive(s)
+        f = torch.tanh(beta * p) * mask
+        f_prime = beta * (1 - torch.tanh(beta * p)**2) * mask
+
+        Wf = torch.einsum('ij,bjhw->bihw', W, f)
+        grad_p_E1 = f_prime * (-Wf - self.b.view(1, -1, 1, 1))
+
+        g_id, g_sx, g_sy = grad_p_E1[:, :self.chn], grad_p_E1[:, self.chn:2*self.chn], grad_p_E1[:, 2*self.chn:]
+        s_padded_gsx = torch.nn.functional.pad(g_sx, [1,1,1,1], mode="circular")
+        s_padded_gsy = torch.nn.functional.pad(g_sy, [1,1,1,1], mode="circular")
+        grad_coupling_bias = g_id \
+            - torch.nn.functional.conv2d(s_padded_gsx, self.Kx, groups=self.chn) \
+            - torch.nn.functional.conv2d(s_padded_gsy, self.Ky, groups=self.chn)
+
+        fs = torch.tanh(beta_s * s)
+        grad_reaction = s * beta_s * (1 - fs**2)
 
         grad_background_penalty = 0.002 * (1.0 - mask) * s
 
-        total_grad = grad_coupling + grad_bias + grad_reaction + grad_background_penalty
-        return total_grad
+        total_grad = grad_coupling_bias + grad_reaction + grad_background_penalty
+        return  torch.clamp(total_grad, -1.0, 1.0)
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
