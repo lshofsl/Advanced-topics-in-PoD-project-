@@ -294,11 +294,9 @@ class EnergyOnlyNCA(torch.nn.Module):
 
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         c = self.c.view(1, -1, 1, 1)
-        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
         E_reaction = (
             -0.5 * a * s.pow(2)
-            + (1 / 3) * c * s.pow(3)
-            + 0.25 * b_sat * s.pow(4)).sum(dim=1).sum(dim=[1, 2])
+            + (1 / 3) * c * s.pow(3)).sum(dim=1).sum(dim=[1, 2])
 
         E_background_penalty = 0.001 * ((1.0 - mask) * s.pow(2)).sum(dim=[1, 2, 3])
         return E_coupling + E_bias + E_reaction + E_background_penalty
@@ -317,13 +315,12 @@ class EnergyOnlyNCA(torch.nn.Module):
         grad_bias = self.b.view(1, -1, 1, 1)
         a = torch.nn.functional.softplus(self.log_a).view(1, -1, 1, 1)
         c = self.c.view(1, -1, 1, 1)
-        b_sat = torch.nn.functional.softplus(self.log_b).view(1, -1, 1, 1)
-        grad_reaction = -a * s + c * s.pow(2) + b_sat * s.pow(3)
+        grad_reaction = -a * s + c * s.pow(2) 
 
         grad_background_penalty = 0.002 * (1.0 - mask) * s   # same mask, no cross-term needed
 
         total_grad = grad_coupling + grad_bias + grad_reaction + grad_background_penalty
-        return torch.clamp(total_grad, -1.0, 1.0)
+        return total_grad
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
