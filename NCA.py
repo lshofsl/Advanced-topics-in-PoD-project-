@@ -203,8 +203,9 @@ class EnergyOnlyNCA(torch.nn.Module):
 
 
     @torch.no_grad()
-    def set_target_anchor(self, target):
-        t = target[:, : self.v_dim, ...]
+    def set_target_anchor(self, target, hebb_channels=16):
+        n = hebb_channels 
+        t = target[:, :n, ...]
         live = (t[:, 3:4] > 0.1).float()
         n_live = live.sum().clamp(min=1.0)
         n_pixels = live.shape[-1] * live.shape[-2]
@@ -221,7 +222,7 @@ class EnergyOnlyNCA(torch.nn.Module):
             corr = (
                 torch.einsum("bnhw,bmhw,bohw->nm", t, shifted, live) / n_live
             )
-            K_hebb[: self.v_dim, : self.v_dim, dy + 1, dx + 1] = corr
+            K_hebb[:n, :n, dy + 1, dx + 1] = corr
 
             corr_alpha = (live * shifted_live).sum() / n_pixels
             K_boundary[3, 3, dy + 1, dx + 1] = corr_alpha
