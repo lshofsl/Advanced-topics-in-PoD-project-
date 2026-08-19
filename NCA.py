@@ -153,7 +153,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         self.K_raw = torch.nn.Parameter(torch.randn(chn, chn, 3, 3) * 1e-2)
         self.log_eta = torch.nn.Parameter(torch.tensor(-4.0))
         self.b = torch.nn.Parameter(torch.zeros(chn))
-        self.log_beta = torch.nn.Parameter(torch.tensor(-1.0))   
+        self.log_beta = torch.nn.Parameter(torch.tensor(1.0))   
 
         self.log_gamma = torch.nn.Parameter(torch.tensor(-1.0))
         self.register_buffer("K_hebb", torch.zeros(chn, chn, 3, 3))
