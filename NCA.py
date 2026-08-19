@@ -221,8 +221,8 @@ class EnergyOnlyNCA(torch.nn.Module):
             corr = torch.einsum("bnhw,bmhw,bohw->nm", t, shifted, live) / n_live
             K_hebb[:n, :n, dy + 1, dx + 1] = corr 
 
-                corr_alpha = (live * shifted_live).sum() / n_pixels
-                K_boundary[3, 3, dy + 1, dx + 1] = corr_alpha
+            corr_alpha = (live * shifted_live).sum() / n_pixels
+            K_boundary[3, 3, dy + 1, dx + 1] = corr_alpha
 
         K_hebb_reflected = K_hebb.flip(dims=[2, 3]).transpose(0, 1)
         self.K_hebb.copy_(0.5 * (K_hebb + K_hebb_reflected))
