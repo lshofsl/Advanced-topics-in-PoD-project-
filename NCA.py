@@ -319,7 +319,7 @@ class EnergyOnlyNCA(torch.nn.Module):
         grad_background_penalty = 0.002 * (1.0 - mask) * s
 
         total_grad = grad_coupling + grad_bias + grad_reaction + grad_background_penalty
-        return torch.clamp(total_grad, -1.0, 1.0)  
+        return total_grad
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
