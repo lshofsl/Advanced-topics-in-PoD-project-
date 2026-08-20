@@ -174,7 +174,7 @@ class EnergyNCA(nn.Module):
         return torch.cat([s, sx, sy], dim=1)  # (B, 48, H, W)
 
     def _get_constrained_W(self):
-        A = self.W_free  # any (P, P) matrix, no symmetry needed
+        A = self.W
         return -0.5 * (A @ A.T + A.T @ A) 
         
     def energy(self, x):
@@ -190,7 +190,6 @@ class EnergyNCA(nn.Module):
 
         h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
         e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
-        e_lin = -(p * h_broadcast).sum(dim=1)  # Shape: (B, H, W)
 
         # 4. Total Energy summed across canvas
         return (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
