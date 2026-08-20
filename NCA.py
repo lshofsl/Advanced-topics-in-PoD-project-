@@ -145,101 +145,96 @@ class GeneCA(torch.nn.Module):
         return x
 
 
-
-class EnergyOnlyNCA(nn.Module):
-    def __init__(self, target_rgba, chn=16):
+class EnergyNCA_MethodA(nn.Module):
+    def __init__(self, chn=16):
         super().__init__()
         self.chn = chn
+        self.perceive_dim = chn * 3  # 16 identity + 16 Sobel_X + 16 Sobel_Y = 48
         
-        B, C, H, W = target_rgba.shape
+        # 1. Local Interaction Matrix W (48 x 48)
+        # Learnable coupling between local perception channels
+        # Initialized near zero to allow stable early updates
+        self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
         
-        self.register_buffer("target_rgba", target_rgba)
-
-        # W introduce a small noise on the hidden channels to make them growth 
-        self.hidden_target = nn.Parameter(torch.randn(1, chn - 4, H, W) * 0.01)
+        # 2. Perception filters (Sobel X and Y)
+        sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
+        self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
+        self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
-        sobel_x = torch.tensor([[-1.,0.,1.],[-2.,0.,2.],[-1.,0.,1.]]) / 8.0
-        self.register_buffer("Kx", sobel_x.view(1,1,3,3).repeat(chn,1,1,1))
-        self.register_buffer("Ky", sobel_x.T.view(1,1,3,3).repeat(chn,1,1,1))
-        
-        # Learnable step size (eta)
+        # Learnable step size eta
         self.log_eta = nn.Parameter(torch.tensor(-3.0))
 
-    def get_X_target(self):
-        """ Dynamically combines RGBA target + learnable hidden prototypes """
-        # Ensure hidden_target matches the batch size of target_rgba
-        target_b = self.target_rgba.shape[0]
-        hidden_b = self.hidden_target.shape[0]
-    
-        if hidden_b != target_b:
-            # Expand hidden_target along batch dim to match target_rgba
-            hidden = self.hidden_target.expand(target_b, -1, -1, -1)
-        else:
-            hidden = self.hidden_target
-
-        return torch.cat([self.target_rgba, hidden], dim=1)
-
-    def to_rgba(self, x):
-        """ RGBA mapping (Direct slice since channels 0-3 explicitly target RGBA) """
-        return x[:, :4, ...]
-
-    def get_alive_mask(self, x):
-        """ Check life based directly on Alpha (channel 3) """
-        alpha = x[:, 3:4, :, :]
-        padded = F.pad(alpha, [1, 1, 1, 1], mode="circular")
-        return F.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
-
     def perceive(self, s):
-        s_padded = F.pad(s, [1,1,1,1], mode="circular")
+        """ Computes local 3x3 perception (Identity, Sobel X, Sobel Y) """
+        s_padded = F.pad(s, [1, 1, 1, 1], mode="circular")
         sx = F.conv2d(s_padded, self.Kx, groups=self.chn)
         sy = F.conv2d(s_padded, self.Ky, groups=self.chn)
-        return torch.cat([s, sx, sy], dim=1)  # (B, 48, H, W)
+        return torch.cat([s, sx, sy], dim=1)  # Shape: (B, 48, H, W)
 
     def energy(self, x):
+        """ 
+        Local Quadratic Energy: E(x) = -0.5 * sum_spatial( p(s)^T * W * p(s) )
+        Measures structural harmony of local patches without referencing target images.
+        """
         s = x[:, :self.chn, ...]
-        p_s = self.perceive(s)
-        p_X = self.perceive(self.get_X_target())
-    
-    # Calculate attractor loss ONLY on RGBA perception (first 3 * 4 = 12 channels of p)
-    # This leaves hidden channels unconstrained by the target energy!
-        p_s_rgba = torch.cat([p_s[:, :4], p_s[:, 16:20], p_s[:, 32:36]], dim=1)
-        p_X_rgba = torch.cat([p_X[:, :4], p_X[:, 16:20], p_X[:, 32:36]], dim=1)
-    
-        return 0.5 * ((p_s_rgba - p_X_rgba) ** 2).sum(dim=[1, 2, 3])
+        p = self.perceive(s)  # (B, 48, H, W)
+        
+        # Symmetric matrix enforcing stability: W_sym = 0.5 * (W + W^T)
+        W_sym = 0.5 * (self.W + self.W.T)
+        
+        # p^T * W * p per pixel
+        # p_W shape: (B, 48, H, W)
+        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
+        
+        # Negative sign ensures gradient descent minimizes energy
+        local_E = -0.5 * (p * p_W).sum(dim=1)  # (B, H, W)
+        return local_E.sum(dim=[1, 2])          # (B,)
 
     def energy_gradient(self, x):
+        """
+        Computes -dE/ds explicitly via the adjoint perception operator
+        """
         s = x[:, :self.chn, ...]
-        p_s = self.perceive(s)
-        p_X = self.perceive(self.get_X_target())
+        p = self.perceive(s)
         
-        diff = p_s - p_X
-        d_id, d_sx, d_sy = diff[:, :self.chn], diff[:, self.chn:2*self.chn], diff[:, 2*self.chn:]
+        W_sym = 0.5 * (self.W + self.W.T)
+        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
         
-        s_padded_dsx = F.pad(d_sx, [1,1,1,1], mode="circular")
-        s_padded_dsy = F.pad(d_sy, [1,1,1,1], mode="circular")
+        # Split transformed perception back to Identity, Sx, Sy components
+        d_id = p_W[:, :self.chn]
+        d_sx = p_W[:, self.chn:2*self.chn]
+        d_sy = p_W[:, 2*self.chn:]
         
-        # Adjoint perception step (transpose conv for Sobel)
+        s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
+        s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
+        
+        # Adjoint convolution (transpose step for Sobel filters)
         grad = d_id \
             - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
             - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
             
         return torch.clamp(grad, -1.0, 1.0)
 
+    def get_alive_mask(self, x):
+        """ Strict 3x3 MaxPool check ensuring growth spreads ONLY from live cells """
+        alpha = x[:, 3:4, :, :]
+        return F.max_pool2d(alpha, kernel_size=3, stride=1, padding=1) > 0.1
+
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x).float()
-        batch_n, chn_n, h, w = x.shape
+        batch_n, _, h, w = x.shape
         eta = F.softplus(self.log_eta)
         
+        # Step in direction of negative energy gradient (Gradient Descent)
         grad_E = self.energy_gradient(x)
-        correction = torch.zeros_like(x)
-        correction[:, :self.chn] = -eta * grad_E
+        correction = eta * grad_E  # Update direction improves local energy
 
+        # Stochastic sub-grid updates
         update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate).float()
         x_update = x + correction * update_mask * pre_life_mask
         
         post_life_mask = self.get_alive_mask(x_update).float()
         return x_update * post_life_mask
-
 
 
 class HYBRID_NCA(torch.nn.Module):
