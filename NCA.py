@@ -174,8 +174,7 @@ class EnergyOnlyNCA(nn.Module):
 
     def get_alive_mask(self, x):
         # We derive life mask from predicted RGBA alpha channel
-        rgba = self.to_rgba(x)
-        alpha = rgba[:, 3:4, :, :]
+        alpha = x[:, 3:4, :, :]
         padded = F.pad(alpha, [1, 1, 1, 1], mode="circular")
         return F.max_pool2d(padded, 3, stride=1, padding=0) > 0.1
 
