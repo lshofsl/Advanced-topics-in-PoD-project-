@@ -260,10 +260,13 @@ class HYBRID_NCA(torch.nn.Module):
 
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
-        self.W =torch.nn.Parameter(torch.zeros(chn, chn))    # Now the matrix is state-state size and do not depend on the perception vector 
-        self.eta = torch.nn.Parameter(torch.tensor(0.2))   
-        self.h = torch.nn.Parameter(torch.zeros(chn))
-        
+        self.W = nn.Parameter(torch.randn(chn, chn) * 0.01)    # Now the matrix is state-state size and do not depend on the perception vector 
+        self.eta = torch.nn.Parameter(torch.tensor(0.2))  
+        self.h = nn.Parameter(torch.zeros(chn))
+        with torch.no_grad():
+            self.h[3] = 0.1 
+
+    
     def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
         padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
