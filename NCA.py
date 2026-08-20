@@ -145,7 +145,7 @@ class GeneCA(torch.nn.Module):
         return x
 
 
-class EnergyNCA_MethodA(nn.Module):
+class EnergyNCA(nn.Module):
     def __init__(self, chn=16):
         super().__init__()
         self.chn = chn
@@ -154,7 +154,7 @@ class EnergyNCA_MethodA(nn.Module):
         # 1. Local Interaction Matrix W (48 x 48)
         # Learnable coupling between local perception channels
         # Initialized near zero to allow stable early updates
-        self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
+        self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 1e-3)
         
         # 2. Perception filters (Sobel X and Y)
         sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
@@ -162,7 +162,7 @@ class EnergyNCA_MethodA(nn.Module):
         self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
         # Learnable step size eta
-        self.log_eta = nn.Parameter(torch.tensor(-3.0))
+        self.log_eta = nn.Parameter(torch.tensor(-4.0))
 
     def perceive(self, s):
         """ Computes local 3x3 perception (Identity, Sobel X, Sobel Y) """
@@ -177,18 +177,15 @@ class EnergyNCA_MethodA(nn.Module):
         Measures structural harmony of local patches without referencing target images.
         """
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)  # (B, 48, H, W)
-        
-        # Symmetric matrix enforcing stability: W_sym = 0.5 * (W + W^T)
+        p = self.perceive(s)  
+        # Symmetric matrix enforcing stability
         W_sym = 0.5 * (self.W + self.W.T)
-        
-        # p^T * W * p per pixel
-        # p_W shape: (B, 48, H, W)
+     
         p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
+        alpha_penalty = -1.0 * s[:, 3:4, ...].sum(dim=[1, 2, 3])
         
-        # Negative sign ensures gradient descent minimizes energy
-        local_E = -0.5 * (p * p_W).sum(dim=1)  # (B, H, W)
-        return local_E.sum(dim=[1, 2])          # (B,)
+        local_E = -0.5 * (p * p_W).sum(dim=1) 
+        return local_E.sum(dim=[1, 2]) + alpha_penalty        
 
     def energy_gradient(self, x):
         """
@@ -215,10 +212,10 @@ class EnergyNCA_MethodA(nn.Module):
             
         return torch.clamp(grad, -1.0, 1.0)
 
-    def get_alive_mask(self, x):
-        """ Strict 3x3 MaxPool check ensuring growth spreads ONLY from live cells """
-        alpha = x[:, 3:4, :, :]
-        return F.max_pool2d(alpha, kernel_size=3, stride=1, padding=1) > 0.1
+    def get_alive_mask(self,x):
+        alpha = x[:, 3:4, :, :] 
+        padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
+        return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x).float()
@@ -228,10 +225,12 @@ class EnergyNCA_MethodA(nn.Module):
         # Step in direction of negative energy gradient (Gradient Descent)
         grad_E = self.energy_gradient(x)
         correction = eta * grad_E  # Update direction improves local energy
-
         # Stochastic sub-grid updates
         update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate).float()
         x_update = x + correction * update_mask * pre_life_mask
+        #Contrainst in visible and hidden channels 
+        x_update[:, :4, ...] = torch.clamp(x_update[:, :4, ...], 0.0, 1.0)
+        x_update[:, 4:, ...] = torch.clamp(x_update[:, 4:, ...], -2.0, 2.0)
         
         post_life_mask = self.get_alive_mask(x_update).float()
         return x_update * post_life_mask
