@@ -145,6 +145,7 @@ class GeneCA(torch.nn.Module):
         return x
 
 
+
 class EnergyNCA(nn.Module):
     def __init__(self, chn=16):
         super().__init__()
@@ -179,31 +180,43 @@ class EnergyNCA(nn.Module):
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)
+        p = self.perceive(s)  # Shape: (B, 48, H, W)
+
+    # 1. Enforce Hopfield symmetry & damped diagonal
         W_sym = self._get_constrained_W()
-        f = torch.tanh(p)
-        f_W = torch.einsum('ij,bjhw->bihw', W_sym, f)
-        e_quad = -0.5 * (f * f_W).sum(dim=1)
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        e_lin = -(f * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
-        return (e_quad + e_lin).sum(dim=[1, 2])
+
+    # 2. Quadratic term: -0.5 * p^T * W * p
+        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
+        e_quad = -0.5 * (p * p_W).sum(dim=1)  # Shape: (B, H, W)
+
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
+        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
+
+        # 4. Total Energy summed across canvas
+        return (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)
+        p = self.perceive(s)  # (B, 48, H, W)
+    
+        # Enforce Hopfield symmetry & damped diagonal
         W_sym = self._get_constrained_W()
-        f = torch.tanh(p)
-        f_prime = 1 - f**2
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        Wf = torch.einsum('ij,bjhw->bihw', W_sym, f)
-        p_transformed = f_prime * (Wf + h_clamped.view(1, -1, 1, 1))   # chain rule factor now included
-
+        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
+        
+        # Split transformed signals back to Identity, Sx, Sy components
         d_id = p_transformed[:, :self.chn]
         d_sx = p_transformed[:, self.chn:2*self.chn]
         d_sy = p_transformed[:, 2*self.chn:]
+    
         s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
         s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
-        grad = d_id - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
+    
+        # Adjoint Sobel Step
+        grad = d_id \
+            - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
+            -F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
+        
         return torch.clamp(grad, -1.0, 1.0)
 
     def get_alive_mask(self, x):
@@ -232,7 +245,6 @@ class EnergyNCA(nn.Module):
 
         post_life_mask = self.get_alive_mask(x_clamped).float()
         return x_clamped * post_life_mask
-
 
 class HYBRID_NCA(torch.nn.Module):
     def __init__(self, chn=16, hidden_n=96):
