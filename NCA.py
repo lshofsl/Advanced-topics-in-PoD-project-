@@ -162,6 +162,8 @@ class EnergyNCA(nn.Module):
         
         # Perception filters
         sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
+
+        self.reguster_buffer("K_lap", laplacian.view(1, 1, 3, 3).repeat(chn, 1, 1, 1)))
         self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
@@ -179,43 +181,31 @@ class EnergyNCA(nn.Module):
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)  # Shape: (B, 48, H, W)
-
-    # 1. Enforce Hopfield symmetry & damped diagonal
+        p = self.perceive(s)
         W_sym = self._get_constrained_W()
-
-    # 2. Quadratic term: -0.5 * p^T * W * p
-        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
-        e_quad = -0.5 * (p * p_W).sum(dim=1)  # Shape: (B, H, W)
-
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
-        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
-
-        # 4. Total Energy summed across canvas
-        return (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
+        f = torch.tanh(p)
+        f_W = torch.einsum('ij,bjhw->bihw', W_sym, f)
+        e_quad = -0.5 * (f * f_W).sum(dim=1)
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
+        e_lin = -(f * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
+        return (e_quad + e_lin).sum(dim=[1, 2])
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)  # (B, 48, H, W)
-    
-        # Enforce Hopfield symmetry & damped diagonal
+        p = self.perceive(s)
         W_sym = self._get_constrained_W()
+        f = torch.tanh(p)
+        f_prime = 1 - f**2
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
-        
-        # Split transformed signals back to Identity, Sx, Sy components
+        Wf = torch.einsum('ij,bjhw->bihw', W_sym, f)
+        p_transformed = f_prime * (Wf + h_clamped.view(1, -1, 1, 1))   # chain rule factor now included
+
         d_id = p_transformed[:, :self.chn]
         d_sx = p_transformed[:, self.chn:2*self.chn]
         d_sy = p_transformed[:, 2*self.chn:]
-    
         s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
         s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
-    
-        # Adjoint Sobel Step
-        grad = d_id \
-            - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
-            -F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
-        
+        grad = d_id - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
         return torch.clamp(grad, -1.0, 1.0)
 
     def get_alive_mask(self, x):
