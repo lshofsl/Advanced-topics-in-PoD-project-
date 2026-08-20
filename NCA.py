@@ -143,24 +143,21 @@ class GeneCA(torch.nn.Module):
         s_update = s + (delta_s * update_mask - self.beta * energy_grad) * pre_life_mask
         x = torch.cat((s_update, gene), dim=1)
         return x
-        
+
+
+
 class EnergyOnlyNCA(nn.Module):
     def __init__(self, target_rgba, chn=16):
         super().__init__()
         self.chn = chn
         
-        # 1. Target Pattern Setup
         B, C, H, W = target_rgba.shape
         
-        # Fixed RGBA target buffer (Channels 0-3)
         self.register_buffer("target_rgba", target_rgba)
-        
-        # LEARNABLE Hidden Target Prototypes (Channels 4-15)
-        # Instead of forcing them to 0, let the optimizer learn what 
-        # hidden pattern best supports stable local growth!
+
+        # W introduce a small noise on the hidden channels to make them growth 
         self.hidden_target = nn.Parameter(torch.randn(1, chn - 4, H, W) * 0.01)
         
-        # Perception filters
         sobel_x = torch.tensor([[-1.,0.,1.],[-2.,0.,2.],[-1.,0.,1.]]) / 8.0
         self.register_buffer("Kx", sobel_x.view(1,1,3,3).repeat(chn,1,1,1))
         self.register_buffer("Ky", sobel_x.T.view(1,1,3,3).repeat(chn,1,1,1))
@@ -193,7 +190,42 @@ class EnergyOnlyNCA(nn.Module):
         p_s = self.perceive(s)
         p_X = self.perceive(self.get_X_target())
         
-        # Local perception patch energy
+        # Local perception patch energy matching
+        E_attractor = 0.5 * ((p_s - p_X) ** 2).sum(dim=[1, 2, 3])
+        return E_attractor
+
+    def energy_gradient(self, x):
+        s = x[:, :self.chn, ...]
+        p_s = self.perceive(s)
+        p_X = self.perceive(self.get_X_target())
+        
+        diff = p_s - p_X
+        d_id, d_sx, d_sy = diff[:, :self.chn], diff[:, self.chn:2*self.chn], diff[:, 2*self.chn:]
+        
+        s_padded_dsx = F.pad(d_sx, [1,1,1,1], mode="circular")
+        s_padded_dsy = F.pad(d_sy, [1,1,1,1], mode="circular")
+        
+        # Adjoint perception step (transpose conv for Sobel)
+        grad = d_id \
+            - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
+            - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
+            
+        return torch.clamp(grad, -1.0, 1.0)
+
+    def forward(self, x, update_rate=0.5):
+        pre_life_mask = self.get_alive_mask(x).float()
+        batch_n, chn_n, h, w = x.shape
+        eta = F.softplus(self.log_eta)
+        
+        grad_E = self.energy_gradient(x)
+        correction = torch.zeros_like(x)
+        correction[:, :self.chn] = -eta * grad_E
+
+        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate).float()
+        x_update = x + correction * update_mask * pre_life_mask
+        
+        post_life_mask = self.get_alive_mask(x_update).float()
+        return x_update * post_life_mask
 
 
 
