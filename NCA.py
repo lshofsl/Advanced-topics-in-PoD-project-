@@ -221,19 +221,25 @@ class EnergyNCA(nn.Module):
         pre_life_mask = self.get_alive_mask(x).float()
         batch_n, _, h, w = x.shape
         eta = F.softplus(self.log_eta)
-        
-        # Step in direction of negative energy gradient (Gradient Descent)
+    
+        # 1. Compute update step
         grad_E = self.energy_gradient(x)
-        correction = eta * grad_E  # Update direction improves local energy
-        # Stochastic sub-grid updates
+        correction = eta * grad_E
+
         update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate).float()
-        x_update = x + correction * update_mask * pre_life_mask
-        #Contrainst in visible and hidden channels 
-        x_update[:, :4, ...] = torch.clamp(x_update[:, :4, ...], 0.0, 1.0)
-        x_update[:, 4:, ...] = torch.clamp(x_update[:, 4:, ...], -2.0, 2.0)
-        
-        post_life_mask = self.get_alive_mask(x_update).float()
-        return x_update * post_life_mask
+    
+        # Out-of-place state update
+        x_raw = x + correction * update_mask * pre_life_mask
+    
+        # 2. Out-of-place clamping (No in-place slice assignments!)
+        rgba = torch.clamp(x_raw[:, :4, ...], 0.0, 1.0)
+        hidden = torch.clamp(x_raw[:, 4:, ...], -2.0, 2.0)
+        x_clamped = torch.cat([rgba, hidden], dim=1)
+
+        # 3. Apply post life mask out-of-place
+        post_life_mask = self.get_alive_mask(x_clamped).float()
+    
+        return x_clamped * post_life_mask
 
 
 class HYBRID_NCA(torch.nn.Module):
