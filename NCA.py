@@ -233,7 +233,7 @@ class EnergyNCA(nn.Module):
         grad_E = self.energy_gradient(x)
         correction = eta * grad_E
 
-        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate).float()
+        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate)
         
         # Out-of-place state update
         x_raw = x + correction * update_mask * pre_life_mask
@@ -311,7 +311,7 @@ class HYBRID_NCA(torch.nn.Module):
         energy_grad =  self.energy_gradient(x)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
 
-        x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
+        x_update = x + (y + self.eta * energy_grad) * update_mask * pre_life_mask
 
         # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
