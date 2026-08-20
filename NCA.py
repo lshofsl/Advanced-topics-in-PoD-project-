@@ -174,12 +174,9 @@ class EnergyNCA(nn.Module):
         return torch.cat([s, sx, sy], dim=1)  # (B, 48, H, W)
 
     def _get_constrained_W(self):
-        """ Helper to get symmetric, non-positive diagonal W out-of-place """
-        W_sym = 0.5 * (self.W + self.W.T)
-        diag_clamped = torch.clamp(torch.diagonal(W_sym), max=0.0)
-        # Reconstruct W_sym with clamped diagonal without in-place mutation
-        return W_sym - torch.diag_embed(torch.diagonal(W_sym)) + torch.diag_embed(diag_clamped)
-
+        A = self.W_free  # any (P, P) matrix, no symmetry needed
+        return -0.5 * (A @ A.T + A.T @ A) 
+        
     def energy(self, x):
         s = x[:, :self.chn, ...]
         p = self.perceive(s)  # Shape: (B, 48, H, W)
@@ -191,8 +188,8 @@ class EnergyNCA(nn.Module):
         p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
         e_quad = -0.5 * (p * p_W).sum(dim=1)  # Shape: (B, H, W)
 
-        # 3. Linear field term: - h^T * p
-        h_broadcast = self.h.view(1, -1, 1, 1)
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
+        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
         e_lin = -(p * h_broadcast).sum(dim=1)  # Shape: (B, H, W)
 
         # 4. Total Energy summed across canvas
