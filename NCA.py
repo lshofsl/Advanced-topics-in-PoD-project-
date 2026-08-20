@@ -246,6 +246,9 @@ class EnergyNCA(nn.Module):
         post_life_mask = self.get_alive_mask(x_clamped).float()
         return x_clamped * post_life_mask
 
+
+
+
 class HYBRID_NCA(torch.nn.Module):
     def __init__(self, chn=16, hidden_n=96):
         super().__init__()
@@ -253,40 +256,70 @@ class HYBRID_NCA(torch.nn.Module):
         self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
         self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
         self.w2.weight.data.zero_()
+
+
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
-        self.W = torch.nn.Parameter(torch.randn(chn, chn) * 0.01)  # local within-cell coupling
+        self.W =torch.nn.Parameter(torch.zeros(chn, chn))    # Now the matrix is state-state size and do not depend on the perception vector 
+        self.eta = torch.nn.Parameter(torch.tensor(0.2))   
+        self.h = nn.Parameter(torch.zeros(self.perceive_dim))
+        with torch.no_grad():
+            self.h[3] = 0.1 
 
     def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
         padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
         return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
-    def energy(self, x):
-        s_public = x[:, :self.chn, ...]
-        J_sym = (self.W + self.W.T) / 2
-        Js = torch.einsum('nm,bmhw->bnhw', J_sym, s_public)
-        energy_density = -0.5 * (s_public * Js).sum(dim=1)  #Fix eta 
-        return energy_density.sum(dim=[1, 2])
+    def _get_constrained_W(self):
+        A = self.W
+        return -0.5 * (A @ A.T + A.T @ A) 
         
+    def energy(self, x):
+        s = x[:, :self.chn, ...]
+
+        W_sym = self._get_constrained_W()
+
+        s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
+        e_quad = -0.5 * (s * s_W).sum(dim=1)  # Shape: (B, H, W)
+
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
+        e_lin = -(s * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
+
+        return (e_quad + e_lin).sum(dim=[1, 2])  
+
+    def energy_gradient(self, x):
+        s = x[:, :self.chn, ...]
+    
+        # Enforce Hopfield symmetry & damped diagonal
+        W_sym = self._get_constrained_W()
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
+        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, s) + h_clamped.view(1, -1, 1, 1)
+        
+        grad = p_transformed[:, :self.chn]
+        return torch.clamp(grad, -1.0, 1.0)
+
+    
+
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
         y = reduced_perception(x, 0)
         y = self.w2(torch.relu(self.w1(y)))
         b, c, h, w = y.shape
-        update_mask = (torch.rand(b, 1, h, w, device=x.device) + update_rate).floor()
+        s_public = x[:, :self.chn, ...]
+        energy_grad =  energy_gradient(x)
+        update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
 
-        x_update = x + y * update_mask * pre_life_mask
+        x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
 
+        # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
         x_final = x_update * post_life_mask
-
         return x_final
-
 
 
 
