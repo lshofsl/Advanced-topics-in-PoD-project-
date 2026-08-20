@@ -173,50 +173,54 @@ class EnergyNCA(nn.Module):
         sy = F.conv2d(s_padded, self.Ky, groups=self.chn)
         return torch.cat([s, sx, sy], dim=1)  # (B, 48, H, W)
 
+    def _get_constrained_W(self):
+        """ Helper to get symmetric, non-positive diagonal W out-of-place """
+        W_sym = 0.5 * (self.W + self.W.T)
+        diag_clamped = torch.clamp(torch.diagonal(W_sym), max=0.0)
+        # Reconstruct W_sym with clamped diagonal without in-place mutation
+        return W_sym - torch.diag_embed(torch.diagonal(W_sym)) + torch.diag_embed(diag_clamped)
+
     def energy(self, x):
         s = x[:, :self.chn, ...]
         p = self.perceive(s)  # Shape: (B, 48, H, W)
-    
-    # 1. Enforce Hopfield symmetry
-        W_sym = 0.5 * (self.W + self.W.T)
-    
+
+    # 1. Enforce Hopfield symmetry & damped diagonal
+        W_sym = self._get_constrained_W()
+
     # 2. Quadratic term: -0.5 * p^T * W * p
         p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
         e_quad = -0.5 * (p * p_W).sum(dim=1)  # Shape: (B, H, W)
-    
-    # 3. Linear field term: - h^T * p
-    # Reshape h to (1, 48, 1, 1) for spatial broadcasting
+
+        # 3. Linear field term: - h^T * p
         h_broadcast = self.h.view(1, -1, 1, 1)
         e_lin = -(p * h_broadcast).sum(dim=1)  # Shape: (B, H, W)
-    
-    # 4. Total Energy summed across canvas (H, W) per batch item
-        total_E = (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
-        return total_E
-    
+
+        # 4. Total Energy summed across canvas
+        return (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
+
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
         p = self.perceive(s)  # (B, 48, H, W)
-        
-        # Symmetric Hopfield Matrix
-        W_sym = 0.5 * (self.W + self.W.T)
-        
+    
+        # Enforce Hopfield symmetry & damped diagonal
+        W_sym = self._get_constrained_W()
+    
         # Compute transformed perception: (W * p) + h
-        # Einsum operates purely linearly without MLPs
         p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + self.h.view(1, -1, 1, 1)
-        
+    
         # Split transformed signals back to Identity, Sx, Sy components
         d_id = p_transformed[:, :self.chn]
         d_sx = p_transformed[:, self.chn:2*self.chn]
         d_sy = p_transformed[:, 2*self.chn:]
-        
+    
         s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
         s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
-        
-        # Adjoint Sobel Step (Transpose step of energy derivative)
+    
+        # Adjoint Sobel Step
         grad = d_id \
             - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
-            - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
-            
+            -F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
+        
         return torch.clamp(grad, -1.0, 1.0)
 
     def get_alive_mask(self, x):
