@@ -167,7 +167,17 @@ class EnergyOnlyNCA(nn.Module):
 
     def get_X_target(self):
         """ Dynamically combines RGBA target + learnable hidden prototypes """
-        return torch.cat([self.target_rgba, self.hidden_target], dim=1)
+        # Ensure hidden_target matches the batch size of target_rgba
+        target_b = self.target_rgba.shape[0]
+        hidden_b = self.hidden_target.shape[0]
+    
+        if hidden_b != target_b:
+            # Expand hidden_target along batch dim to match target_rgba
+            hidden = self.hidden_target.expand(target_b, -1, -1, -1)
+        else:
+            hidden = self.hidden_target
+
+        return torch.cat([self.target_rgba, hidden], dim=1)
 
     def to_rgba(self, x):
         """ RGBA mapping (Direct slice since channels 0-3 explicitly target RGBA) """
