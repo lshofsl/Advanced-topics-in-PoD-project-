@@ -305,7 +305,7 @@ class HYBRID_NCA(torch.nn.Module):
         y = self.w2(torch.relu(self.w1(y)))
         b, c, h, w = y.shape
         s_public = x[:, :self.chn, ...]
-        energy_grad =  energy_gradient(x)
+        energy_grad =  self.energy_gradient(x)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
 
         x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
