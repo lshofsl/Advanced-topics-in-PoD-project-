@@ -204,10 +204,9 @@ class EnergyNCA(nn.Module):
     
         # Enforce Hopfield symmetry & damped diagonal
         W_sym = self._get_constrained_W()
-    
-        # Compute transformed perception: (W * p) + h
-        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + self.h.view(1, -1, 1, 1)
-    
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
+        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
+        
         # Split transformed signals back to Identity, Sx, Sy components
         d_id = p_transformed[:, :self.chn]
         d_sx = p_transformed[:, self.chn:2*self.chn]
