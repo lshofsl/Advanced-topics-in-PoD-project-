@@ -199,10 +199,13 @@ class EnergyOnlyNCA(nn.Module):
         s = x[:, :self.chn, ...]
         p_s = self.perceive(s)
         p_X = self.perceive(self.get_X_target())
-        
-        # Local perception patch energy matching
-        E_attractor = 0.5 * ((p_s - p_X) ** 2).sum(dim=[1, 2, 3])
-        return E_attractor
+    
+    # Calculate attractor loss ONLY on RGBA perception (first 3 * 4 = 12 channels of p)
+    # This leaves hidden channels unconstrained by the target energy!
+        p_s_rgba = torch.cat([p_s[:, :4], p_s[:, 16:20], p_s[:, 32:36]], dim=1)
+        p_X_rgba = torch.cat([p_X[:, :4], p_X[:, 16:20], p_X[:, 32:36]], dim=1)
+    
+        return 0.5 * ((p_s_rgba - p_X_rgba) ** 2).sum(dim=[1, 2, 3]
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
