@@ -162,8 +162,6 @@ class EnergyNCA(nn.Module):
         
         # Perception filters
         sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
-
-        self.reguster_buffer("K_lap", laplacian.view(1, 1, 3, 3).repeat(chn, 1, 1, 1)))
         self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
