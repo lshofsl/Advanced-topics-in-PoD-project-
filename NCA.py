@@ -205,7 +205,7 @@ class EnergyOnlyNCA(nn.Module):
         p_s_rgba = torch.cat([p_s[:, :4], p_s[:, 16:20], p_s[:, 32:36]], dim=1)
         p_X_rgba = torch.cat([p_X[:, :4], p_X[:, 16:20], p_X[:, 32:36]], dim=1)
     
-        return 0.5 * ((p_s_rgba - p_X_rgba) ** 2).sum(dim=[1, 2, 3]
+        return 0.5 * ((p_s_rgba - p_X_rgba) ** 2).sum(dim=[1, 2, 3])
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
