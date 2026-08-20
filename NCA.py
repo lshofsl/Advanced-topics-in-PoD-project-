@@ -149,96 +149,101 @@ class EnergyNCA(nn.Module):
     def __init__(self, chn=16):
         super().__init__()
         self.chn = chn
-        self.perceive_dim = chn * 3  # 16 identity + 16 Sobel_X + 16 Sobel_Y = 48
+        self.perceive_dim = chn * 3  # 48 channels
         
         # 1. Local Interaction Matrix W (48 x 48)
-        # Learnable coupling between local perception channels
-        # Initialized near zero to allow stable early updates
-        self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 1e-3)
+        self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
         
-        # 2. Perception filters (Sobel X and Y)
+        # 2. Linear Field / Bias h (48,) - Drives spontaneous boundary growth
+        self.h = nn.Parameter(torch.zeros(self.perceive_dim))
+        # Pre-bias Alpha identity channel so life naturally wants to expand from neighbors
+        with torch.no_grad():
+            self.h[3] = 0.1  # Positive bias for Alpha channel
+        
+        # Perception filters
         sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
         self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
-        # Learnable step size eta
-        self.log_eta = nn.Parameter(torch.tensor(-4.0))
+        self.log_eta = nn.Parameter(torch.tensor(-2.5))
 
     def perceive(self, s):
-        """ Computes local 3x3 perception (Identity, Sobel X, Sobel Y) """
         s_padded = F.pad(s, [1, 1, 1, 1], mode="circular")
         sx = F.conv2d(s_padded, self.Kx, groups=self.chn)
         sy = F.conv2d(s_padded, self.Ky, groups=self.chn)
-        return torch.cat([s, sx, sy], dim=1)  # Shape: (B, 48, H, W)
+        return torch.cat([s, sx, sy], dim=1)  # (B, 48, H, W)
 
     def energy(self, x):
-        """ 
-        Local Quadratic Energy: E(x) = -0.5 * sum_spatial( p(s)^T * W * p(s) )
-        Measures structural harmony of local patches without referencing target images.
-        """
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)  
-        # Symmetric matrix enforcing stability
+        p = self.perceive(s)  # Shape: (B, 48, H, W)
+    
+    # 1. Enforce Hopfield symmetry
         W_sym = 0.5 * (self.W + self.W.T)
-     
+    
+    # 2. Quadratic term: -0.5 * p^T * W * p
         p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
-        alpha_penalty = -1.0 * s[:, 3:4, ...].sum(dim=[1, 2, 3])
-        
-        local_E = -0.5 * (p * p_W).sum(dim=1) 
-        return local_E.sum(dim=[1, 2]) + alpha_penalty        
-
+        e_quad = -0.5 * (p * p_W).sum(dim=1)  # Shape: (B, H, W)
+    
+    # 3. Linear field term: - h^T * p
+    # Reshape h to (1, 48, 1, 1) for spatial broadcasting
+        h_broadcast = self.h.view(1, -1, 1, 1)
+        e_lin = -(p * h_broadcast).sum(dim=1)  # Shape: (B, H, W)
+    
+    # 4. Total Energy summed across canvas (H, W) per batch item
+        total_E = (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
+        return total_E
+    
     def energy_gradient(self, x):
-        """
-        Computes -dE/ds explicitly via the adjoint perception operator
-        """
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)
+        p = self.perceive(s)  # (B, 48, H, W)
         
+        # Symmetric Hopfield Matrix
         W_sym = 0.5 * (self.W + self.W.T)
-        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
         
-        # Split transformed perception back to Identity, Sx, Sy components
-        d_id = p_W[:, :self.chn]
-        d_sx = p_W[:, self.chn:2*self.chn]
-        d_sy = p_W[:, 2*self.chn:]
+        # Compute transformed perception: (W * p) + h
+        # Einsum operates purely linearly without MLPs
+        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + self.h.view(1, -1, 1, 1)
+        
+        # Split transformed signals back to Identity, Sx, Sy components
+        d_id = p_transformed[:, :self.chn]
+        d_sx = p_transformed[:, self.chn:2*self.chn]
+        d_sy = p_transformed[:, 2*self.chn:]
         
         s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
         s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
         
-        # Adjoint convolution (transpose step for Sobel filters)
+        # Adjoint Sobel Step (Transpose step of energy derivative)
         grad = d_id \
             - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
             - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
             
         return torch.clamp(grad, -1.0, 1.0)
 
-    def get_alive_mask(self,x):
-        alpha = x[:, 3:4, :, :] 
-        padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
-        return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
+    def get_alive_mask(self, x):
+        alpha = x[:, 3:4, :, :]
+        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
+        return F.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x).float()
         batch_n, _, h, w = x.shape
         eta = F.softplus(self.log_eta)
-    
-        # 1. Compute update step
+        
+        # Direct Negative Energy Gradient Descent
         grad_E = self.energy_gradient(x)
         correction = eta * grad_E
 
         update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate).float()
-    
+        
         # Out-of-place state update
         x_raw = x + correction * update_mask * pre_life_mask
-    
-        # 2. Out-of-place clamping (No in-place slice assignments!)
+        
+        # Out-of-place clamping to prevent exploding gradients
         rgba = torch.clamp(x_raw[:, :4, ...], 0.0, 1.0)
         hidden = torch.clamp(x_raw[:, 4:, ...], -2.0, 2.0)
         x_clamped = torch.cat([rgba, hidden], dim=1)
 
-        # 3. Apply post life mask out-of-place
         post_life_mask = self.get_alive_mask(x_clamped).float()
-    
         return x_clamped * post_life_mask
 
 
