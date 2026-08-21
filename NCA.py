@@ -154,13 +154,13 @@ class EnergyNCA(nn.Module):
         
         # 1. Local Interaction Matrix W (48 x 48)
         self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
-        self.beta = nn.Parameter(torch.tensor(0.5))
+        self.beta = nn.Parameter(torch.tensor(0.01))
         
         # 2. Linear Field / Bias h (48,) - Drives spontaneous boundary growth
         self.h = nn.Parameter(torch.zeros(self.perceive_dim))
         # Pre-bias Alpha identity channel so life naturally wants to expand from neighbors
         with torch.no_grad():
-            self.h[3] = 0.1  # Positive bias for Alpha channel
+            self.h[3] = 0.5 #strong alpha initialization 
         
         # Perception filters
         sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
@@ -270,7 +270,7 @@ class HYBRID_NCA(torch.nn.Module):
         self.eta = torch.nn.Parameter(torch.tensor(0.2))  
         self.h = nn.Parameter(torch.zeros(chn))
         with torch.no_grad():
-            self.h[3] = 0.1 
+            self.h[3] = 0.5 #strong alpha initialization 
 
     
     def get_alive_mask(self,x):
