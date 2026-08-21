@@ -167,7 +167,7 @@ class EnergyNCA(nn.Module):
         self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
-        self.log_eta = nn.Parameter(torch.tensor(-2.5))
+        self.log_eta = nn.Parameter(torch.tensor(-3.8))
 
     def cohen_grossberg(self, s, beta):
         fs = torch.tanh(beta * s)
