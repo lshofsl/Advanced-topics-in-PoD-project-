@@ -275,6 +275,10 @@ class HYBRID_NCA(torch.nn.Module):
         with torch.no_grad():
             self.h[3] = 0.5 #strong alpha initialization 
 
+    def cohen_grossberg(self, s, beta):
+        fs = torch.tanh(beta * s)
+        return s * fs - s + (1.0 / beta) * torch.log(1.0 + fs)
+
     
     def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
