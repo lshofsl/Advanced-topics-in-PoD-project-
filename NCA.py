@@ -294,33 +294,30 @@ class HYBRID_NCA(torch.nn.Module):
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)   
         W_sym = self._get_constrained_W()
+        h_clamped = self._get_clamped_h()
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
         e_quad = -0.5 * (s * s_W).sum(dim=1)
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)
         e_lin = -(s * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
-
         diffusion = self.cohen_grossberg(s, beta).sum(dim=1)   
 
         return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
     def energy_gradient(self, x):
+        """Calculates exact dE/ds (Energy Gradient)."""
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)
-
         W_sym = self._get_constrained_W()
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        s_transformed = torch.einsum('ij,bjhw->bihw', W_sym, s) + h_clamped.view(1, -1, 1, 1)
+        h_clamped = self._get_clamped_h()
 
-
-        grad_coupling_bias = s_transformed[:, :self.chn]
+        s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
+        grad_coupling_bias = -s_W - h_clamped.view(1, -1, 1, 1)
 
         fs = torch.tanh(beta * s)
-        d_ediff_ds = beta * s * (1.0 - fs**2)
-        grad_diffusion = -d_ediff_ds
+        grad_diffusion = beta * s * (1.0 - fs**2) + fs
         
-        total = grad_coupling_bias + grad_diffusion
-        return torch.clamp(total, -1.0, 1.0)
+        dE_ds = grad_coupling_bias + grad_diffusion
+        return torch.clamp(dE_ds, -1.0, 1.0)
 
 
     def forward(self, x, update_rate=0.5):
@@ -332,7 +329,7 @@ class HYBRID_NCA(torch.nn.Module):
         energy_grad =  self.energy_gradient(x)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
 
-        x_update = x + (y + self.eta * energy_grad) * update_mask * pre_life_mask
+        x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
 
         # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
