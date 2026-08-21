@@ -294,7 +294,7 @@ class HYBRID_NCA(torch.nn.Module):
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)   
         W_sym = self._get_constrained_W()
-        h_clamped = self._get_clamped_h()
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
         e_quad = -0.5 * (s * s_W).sum(dim=1)
@@ -308,7 +308,7 @@ class HYBRID_NCA(torch.nn.Module):
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)
         W_sym = self._get_constrained_W()
-        h_clamped = self._get_clamped_h()
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
         grad_coupling_bias = -s_W - h_clamped.view(1, -1, 1, 1)
