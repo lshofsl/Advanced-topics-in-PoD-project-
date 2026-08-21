@@ -154,6 +154,7 @@ class EnergyNCA(nn.Module):
         
         # 1. Local Interaction Matrix W (48 x 48)
         self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
+        beta = nn.Parameter(torch.tensor(0.1))
         
         # 2. Linear Field / Bias h (48,) - Drives spontaneous boundary growth
         self.h = nn.Parameter(torch.zeros(self.perceive_dim))
@@ -168,6 +169,10 @@ class EnergyNCA(nn.Module):
         
         self.log_eta = nn.Parameter(torch.tensor(-2.5))
 
+    def cohen_grossberg(self, s, beta):
+        fs = torch.tanh(beta * s)
+        return s * fs - s + (1.0 / beta) * torch.log(1.0 + fs)
+
     def perceive(self, s):
         s_padded = F.pad(s, [1, 1, 1, 1], mode="circular")
         sx = F.conv2d(s_padded, self.Kx, groups=self.chn)
@@ -176,48 +181,49 @@ class EnergyNCA(nn.Module):
 
     def _get_constrained_W(self):
         A = self.W
-        return -0.5 * (A @ A.T + A.T @ A) 
+        return -0.5 * (A + A.T) 
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)  # Shape: (B, 48, H, W)
-
-    # 1. Enforce Hopfield symmetry & damped diagonal
+        p = self.perceive(s)
+        beta = F.softplus(self.beta)   
         W_sym = self._get_constrained_W()
 
-    # 2. Quadratic term: -0.5 * p^T * W * p
         p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
-        e_quad = -0.5 * (p * p_W).sum(dim=1)  # Shape: (B, H, W)
-
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
+        e_quad = -0.5 * (p * p_W).sum(dim=1)
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
         e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
 
-        # 4. Total Energy summed across canvas
-        return (e_quad + e_lin).sum(dim=[1, 2])  # Shape: (B,)
+        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)   
+
+        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)  # (B, 48, H, W)
-    
-        # Enforce Hopfield symmetry & damped diagonal
+        p = self.perceive(s)
+        beta = F.softplus(self.beta)
+
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
         p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
-        
-        # Split transformed signals back to Identity, Sx, Sy components
+
         d_id = p_transformed[:, :self.chn]
         d_sx = p_transformed[:, self.chn:2*self.chn]
         d_sy = p_transformed[:, 2*self.chn:]
-    
+
         s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
         s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
-    
-        # Adjoint Sobel Step
-        grad = d_id \
+
+        grad_coupling_bias = d_id \
             - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
-            -F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
-        
-        return torch.clamp(grad, -1.0, 1.0)
+            - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
+
+        fs = torch.tanh(beta * s)
+        phi_prime = s * beta * (1 - fs**2)          # d(varphi)/ds — same closed form verified earlier
+        grad_diffusion = -phi_prime                  # negated, to match this method's "-dE/ds" convention
+
+        total = grad_coupling_bias + grad_diffusion
+        return torch.clamp(total, -1.0, 1.0)
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
