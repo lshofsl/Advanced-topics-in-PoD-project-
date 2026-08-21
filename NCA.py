@@ -154,7 +154,7 @@ class EnergyNCA(nn.Module):
         
         # 1. Local Interaction Matrix W (48 x 48)
         self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
-        beta = nn.Parameter(torch.tensor(0.1))
+        self.beta = nn.Parameter(torch.tensor(0.1))
         
         # 2. Linear Field / Bias h (48,) - Drives spontaneous boundary growth
         self.h = nn.Parameter(torch.zeros(self.perceive_dim))
