@@ -328,8 +328,9 @@ class HYBRID_NCA(torch.nn.Module):
         s_public = x[:, :self.chn, ...]
         energy_grad =  self.energy_gradient(x)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
-
-        x_update = x + (y - self.eta * energy_grad) * update_mask * pre_life_mask
+        
+        eta = 0.05 * torch.sigmoid(self.eta)
+        x_update = x + (y - eta* energy_grad) * update_mask * pre_life_mask
 
         # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
