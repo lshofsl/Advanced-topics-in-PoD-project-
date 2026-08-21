@@ -251,7 +251,7 @@ class EnergyNCA(nn.Module):
         
         # Out-of-place clamping to prevent exploding gradients
         rgba = torch.clamp(x_raw[:, :4, ...], 0.0, 1.0)
-        hidden = torch.clamp(x_raw[:, 4:, ...], -2.0, 2.0)
+        hidden = torch.tanh(x_raw[:, 4:, ...])
         x_clamped = torch.cat([rgba, hidden], dim=1)
 
         post_life_mask = self.get_alive_mask(x_clamped).float()
