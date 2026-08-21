@@ -154,7 +154,7 @@ class EnergyNCA(nn.Module):
         
         # 1. Local Interaction Matrix W (48 x 48)
         self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
-        self.beta = nn.Parameter(torch.tensor(1.0))
+        self.beta = nn.Parameter(torch.tensor(0.5))
         
         # 2. Linear Field / Bias h (48,) - Drives spontaneous boundary growth
         self.h = nn.Parameter(torch.zeros(self.perceive_dim))
@@ -167,7 +167,7 @@ class EnergyNCA(nn.Module):
         self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
         
-        self.log_eta = nn.Parameter(torch.tensor(-3.5))
+        self.log_eta = nn.Parameter(torch.tensor(-2.5))
 
     def cohen_grossberg(self, s, beta):
         fs = torch.tanh(beta * s)
