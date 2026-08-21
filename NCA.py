@@ -177,9 +177,6 @@ class EnergyNCA(nn.Module):
         s_padded = F.pad(s, [1, 1, 1, 1], mode="constant")
         sx = F.conv2d(s_padded, self.Kx, groups=self.chn)
         sy = F.conv2d(s_padded, self.Ky, groups=self.chn)
-
-        sx = torch.clamp(sx, -1.0, 1.0)
-        sy = torch.clamp(sy, -1.0, 1.0)
     
         return torch.cat([s, sx, sy], dim=1)
 
