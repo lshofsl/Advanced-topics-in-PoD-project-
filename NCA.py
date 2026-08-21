@@ -270,6 +270,7 @@ class HYBRID_NCA(torch.nn.Module):
         self.h_dim = chn - self.v_dim
         self.W = nn.Parameter(torch.randn(chn, chn) * 0.1)    # Now the matrix is state-state size and do not depend on the perception vector 
         self.eta = torch.nn.Parameter(torch.tensor(0.2))  
+        self.beta = nn.Parameter(torch.tensor(0.01))
         self.h = nn.Parameter(torch.zeros(chn))
         with torch.no_grad():
             self.h[3] = 0.5 #strong alpha initialization 
@@ -282,33 +283,41 @@ class HYBRID_NCA(torch.nn.Module):
 
     def _get_constrained_W(self):
         A = self.W
-        return -0.5 * (A @ A.T + A.T @ A) 
+        W_sym = -0.5 * (A + A.T)
+        return W_sym
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
-
+        beta = F.softplus(self.beta)   
         W_sym = self._get_constrained_W()
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
-        e_quad = -0.5 * (s * s_W).sum(dim=1)  # Shape: (B, H, W)
-
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)   # match energy_gradient()
+        e_quad = -0.5 * (s * s_W).sum(dim=1)
+        h_clamped = torch.clamp(self.h, -0.05, 0.05)
         e_lin = -(s * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
 
-        return (e_quad + e_lin).sum(dim=[1, 2])  
+        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)   
+
+        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
-    
-        # Enforce Hopfield symmetry & damped diagonal
+        beta = F.softplus(self.beta)
+
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, s) + h_clamped.view(1, -1, 1, 1)
-        
-        grad = p_transformed[:, :self.chn]
-        return torch.clamp(grad, -1.0, 1.0)
+        s_transformed = torch.einsum('ij,bjhw->bihw', W_sym, s) + h_clamped.view(1, -1, 1, 1)
 
-    
+
+        grad_coupling_bias = s_transformed[:, :self.chn]
+
+        fs = torch.tanh(beta * s)
+        d_ediff_ds = beta * s * (1.0 - fs**2)
+        grad_diffusion = -d_ediff_ds
+        
+        total = grad_coupling_bias + grad_diffusion
+        return torch.clamp(total, -1.0, 1.0)
+
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
@@ -323,7 +332,7 @@ class HYBRID_NCA(torch.nn.Module):
 
         # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
-        h_part = torch.tanh(x_update[:, self.v_dim:self.chn, ...])
+        h_part = torch.tanh(x_update[:, 4:, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
