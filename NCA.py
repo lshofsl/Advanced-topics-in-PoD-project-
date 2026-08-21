@@ -181,7 +181,11 @@ class EnergyNCA(nn.Module):
 
     def _get_constrained_W(self):
         A = self.W
-        return -0.5 * (A + A.T) 
+        W_sym = -0.5 * (A + A.T)
+        # No self interactions 
+        diag_mask = 1.0 - torch.eye(self.perceive_dim, device=A.device)
+        W_no_self = W_sym * diag_mask
+        return W_no_self
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
