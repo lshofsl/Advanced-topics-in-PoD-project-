@@ -174,10 +174,14 @@ class EnergyNCA(nn.Module):
         return s * fs - s + (1.0 / beta) * torch.log(1.0 + fs)
 
     def perceive(self, s):
-        s_padded = F.pad(s, [1, 1, 1, 1], mode="circular")
+        s_padded = F.pad(s, [1, 1, 1, 1], mode="constant")
         sx = F.conv2d(s_padded, self.Kx, groups=self.chn)
         sy = F.conv2d(s_padded, self.Ky, groups=self.chn)
-        return torch.cat([s, sx, sy], dim=1)  # (B, 48, H, W)
+
+        sx = torch.clamp(sx, -1.0, 1.0)
+        sy = torch.clamp(sy, -1.0, 1.0)
+    
+        return torch.cat([s, sx, sy], dim=1)
 
     def _get_constrained_W(self):
         A = self.W
@@ -215,8 +219,8 @@ class EnergyNCA(nn.Module):
         d_sx = p_transformed[:, self.chn:2*self.chn]
         d_sy = p_transformed[:, 2*self.chn:]
 
-        s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="circular")
-        s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="circular")
+        s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="constant")
+        s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="constant")
 
         grad_coupling_bias = d_id \
             - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
@@ -231,7 +235,7 @@ class EnergyNCA(nn.Module):
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
-        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
+        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="constant")
         return F.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def forward(self, x, update_rate=0.5):
