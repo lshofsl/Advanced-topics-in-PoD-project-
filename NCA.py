@@ -256,7 +256,7 @@ class HYBRID_NCA(torch.nn.Module):
         eta = 0.05 * torch.sigmoid(self.eta)
         #The update state now is completly guided by the energy_grad but for the 
         #perception propery we add this state 
-        dx = -eta * energy_grad * update_mask * pre_life_mask) #Differential state to be updated 
+        dx = -eta * energy_grad * update_mask * pre_life_mask #Differential state to be updated 
         x_update = x + dx 
 
         # Bound hidden channels only, leave RGBA as-is
