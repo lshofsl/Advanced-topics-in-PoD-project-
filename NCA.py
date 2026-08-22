@@ -286,8 +286,8 @@ class HYBRID_NCA(torch.nn.Module):
         return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def _get_constrained_W(self):
-        M = self.W
-        W_sym = -torch.matmul(M.T, M) / (self.chn ** 0.5)
+        A = self.W
+        W_sym = -0.5 * (A + A.T)
         return W_sym
         
     def energy(self, x):
