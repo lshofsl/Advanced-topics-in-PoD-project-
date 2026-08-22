@@ -173,12 +173,11 @@ class HYBRID_NCA(torch.nn.Module):
 
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
-        self.W = nn.Parameter(torch.randn(chn, chn) * 0.1)    # Now the matrix is state-state size and do not depend on the perception vector 
+        self.W = nn.Parameter(torch.randn(chn, chn) * 0.01)    # Now the matrix is state-state size and do not depend on the perception vector 
         self.eta = torch.nn.Parameter(torch.tensor(0.1))  
         self.beta = nn.Parameter(torch.tensor(0.01))
         self.h = nn.Parameter(torch.zeros(chn))
-        with torch.no_grad():
-            self.h[3] = 0.5 #strong alpha initialization 
+        
 
     def cohen_grossberg(self, s, beta):
         fs = torch.tanh(beta * s)
@@ -257,8 +256,8 @@ class HYBRID_NCA(torch.nn.Module):
         eta = 0.05 * torch.sigmoid(self.eta)
         #The update state now is completly guided by the energy_grad but for the 
         #perception propery we add this state 
-        dx = -eta * energy_grad  #Differential state to be updated 
-        x_update = (x + dx) * update_mask * pre_life_mask
+        dx = -eta * energy_grad * update_mask * pre_life_mask) #Differential state to be updated 
+        x_update = x + dx 
 
         # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
