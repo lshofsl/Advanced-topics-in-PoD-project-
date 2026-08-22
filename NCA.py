@@ -287,21 +287,34 @@ class HYBRID_NCA(torch.nn.Module):
 
     def _get_constrained_W(self):
         A = self.W
-        W_sym = -0.5 * (A + A.T)
+        W_sym = 0.5 * (A + A.T)
         return W_sym
+        
+    def MLP(self, x): 
+        y = self.reduce_perception(x) # compute spatial perception
+        y = self.w2(F.relu(self.w1(y))) # pass tensor y through layers
+        return y
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        beta = F.softplus(self.beta)   
+        beta = F.softplus(self.beta)  
+        # The couping matrix remains symmetric always
         W_sym = self._get_constrained_W()
+        # We constraint the bias factor to not overgrowht the energy 
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
+        y = self.MLP(s)
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
+        #Negative term
         e_quad = -0.5 * (s * s_W).sum(dim=1)
+        #Negative term
         e_lin = -(s * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
+        #Negative term
+        e_per = -(y * s).sum(dim=1)
+        #Positive term
         diffusion = self.cohen_grossberg(s, beta).sum(dim=1)   
-
-        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
+        #All terms are calcualted with their respective signs 
+        return (e_quad + e_lin + diffusion + e_per).sum(dim=[1, 2])
 
     def energy_gradient(self, x):
         """Calculates exact dE/ds (Energy Gradient)."""
@@ -310,27 +323,37 @@ class HYBRID_NCA(torch.nn.Module):
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
 
+        y = self.MLP(x)
+
+        # 1. Coupling and Bias Gradient: -W_sym @ s - h
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
         grad_coupling_bias = -s_W - h_clamped.view(1, -1, 1, 1)
 
+        # 2. Perception Field Gradient: -y
+        grad_perc = -y
+
+        # 3. Cohen-Grossberg Barrier Gradient: d/ds [V_CG(s)] = s - tanh(beta * s)
         fs = torch.tanh(beta * s)
-        grad_diffusion = beta * s * (1.0 - fs**2) + fs
-        
-        dE_ds = grad_coupling_bias + grad_diffusion
+        grad_diffusion = s - fs
+
+        # Exact Analytical Gradient dE/ds
+        dE_ds = grad_coupling_bias + grad_perc + grad_diffusion
+    
         return torch.clamp(dE_ds, -1.0, 1.0)
 
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
-        y = reduced_perception(x, 0)
-        y = self.w2(torch.relu(self.w1(y)))
+        y = self.MLP(x)
         b, c, h, w = y.shape
-        s_public = x[:, :self.chn, ...]
         energy_grad =  self.energy_gradient(x)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
         
         eta = 0.05 * torch.sigmoid(self.eta)
-        x_update = x + (y - eta* energy_grad) * update_mask * pre_life_mask
+        #The update state now is completly guided by the energy_grad but for the 
+        #perception propery we add this state 
+        dx = -eta * energy_grad  #Differential state to be updated 
+        x_update = (x + dx) * update_mask * pre_life_mask
 
         # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
