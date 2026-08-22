@@ -269,7 +269,7 @@ class HYBRID_NCA(torch.nn.Module):
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
         self.W = nn.Parameter(torch.randn(chn, chn) * 0.1)    # Now the matrix is state-state size and do not depend on the perception vector 
-        self.eta = torch.nn.Parameter(torch.tensor(0.2))  
+        self.eta = torch.nn.Parameter(torch.tensor(0.1))  
         self.beta = nn.Parameter(torch.tensor(0.01))
         self.h = nn.Parameter(torch.zeros(chn))
         with torch.no_grad():
@@ -287,7 +287,7 @@ class HYBRID_NCA(torch.nn.Module):
 
     def _get_constrained_W(self):
         M = self.W
-        W_sym = -torch.matmul(M.T, M)
+        W_sym = -torch.matmul(M.T, M) / (self.chn ** 0.5)
         return W_sym
         
     def energy(self, x):
