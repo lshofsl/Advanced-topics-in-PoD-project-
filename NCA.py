@@ -291,7 +291,7 @@ class HYBRID_NCA(torch.nn.Module):
         return W_sym
         
     def MLP(self, x): 
-        y = self.reduce_perception(x) # compute spatial perception
+        y = reduce_perception(x) # compute spatial perception
         y = self.w2(F.relu(self.w1(y))) # pass tensor y through layers
         return y
         
