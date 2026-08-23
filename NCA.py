@@ -67,47 +67,33 @@ class EnergyNCA(nn.Module):
         with torch.no_grad():
             self.h[3] = 0.5 #strong alpha initialization 
         
-        # Perception filters
-        sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]) / 8.0
-        self.register_buffer("Kx", sobel_x.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
-        self.register_buffer("Ky", sobel_x.T.view(1, 1, 3, 3).repeat(chn, 1, 1, 1))
-        
+
         self.log_eta = nn.Parameter(torch.tensor(-3.8))
 
     def cohen_grossberg(self, s, beta):
         fs = torch.tanh(beta * s)
         return s * fs - s + (1.0 / beta) * torch.log(1.0 + fs)
 
-    def perceive(self, s):
-        s_padded = F.pad(s, [1, 1, 1, 1], mode="constant")
-        sx = F.conv2d(s_padded, self.Kx, groups=self.chn)
-        sy = F.conv2d(s_padded, self.Ky, groups=self.chn)
-    
-        return torch.cat([s, sx, sy], dim=1)
-
     def _get_constrained_W(self):
         A = self.W
-        W_sym = -0.5 * (A + A.T)
+        W_sym = 0.5 * (A + A.T)
         return W_sym
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)
-        beta = F.softplus(self.beta)   
+        p = reduced_perception(s)                                
+        beta = F.softplus(self.beta)
         W_sym = self._get_constrained_W()
-
-        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
-        e_quad = -0.5 * (p * p_W).sum(dim=1)
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
-
-        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)   
-
-        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
+        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)          
+        e_quad = -0.5 * (p * p_W).sum(dim=1)
+        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)   
+        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)     
+        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])  
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
-        p = self.perceive(s)
+        p = reduced_perception(s) 
         beta = F.softplus(self.beta)
 
         W_sym = self._get_constrained_W()
@@ -126,8 +112,7 @@ class EnergyNCA(nn.Module):
             - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
 
         fs = torch.tanh(beta * s)
-        d_ediff_ds = beta * s * (1.0 - fs**2)
-        grad_diffusion = -d_ediff_ds
+        grad_diffusion = s * beta * (1 - fs**2)
 
         total = grad_coupling_bias + grad_diffusion
         return torch.clamp(total, -1.0, 1.0)
