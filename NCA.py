@@ -220,22 +220,23 @@ class HYBRID_NCA(torch.nn.Module):
         #All terms are calcualted with their respective signs 
         return (e_quad + e_lin + diffusion + e_per).sum(dim=[1, 2])
 
-    def energy_gradient(self, x):
+    def energy_gradient(self, x,  create_graph=True):
         """Calculates exact dE/ds (Energy Gradient)."""
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
 
-        y = self.MLP(x)
-
         # 1. Coupling and Bias Gradient: -W_sym @ s - h
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
         grad_coupling_bias = -s_W - h_clamped.view(1, -1, 1, 1)
 
-        # 2. Perception Field Gradient: -y
-        grad_perc = -y
-
+        # 2. Perception Field Gradient: torch grad to obtain the derivative of the kernels filters
+        with torch.enable_grad():                                 
+            s_ = s if s.requires_grad else s.detach().requires_grad_(True)
+            y = self.MLP(s_)
+            vjp, = torch.autograd.grad(y, s_, grad_outputs=s_, create_graph=create_graph)
+        grad_perc = -y - vjp
         # 3. Cohen-Grossberg Barrier Gradient: d/ds [V_CG(s)] = s - tanh(beta * s)
         fs = torch.tanh(beta * s)
         grad_diffusion = s - fs
@@ -250,7 +251,7 @@ class HYBRID_NCA(torch.nn.Module):
         pre_life_mask = self.get_alive_mask(x)
         y = self.MLP(x)
         b, c, h, w = y.shape
-        energy_grad =  self.energy_gradient(x)
+        energy_grad =  self.energy_gradient(x,  create_graph=True)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
         
         eta = 0.05 * torch.sigmoid(self.eta)
