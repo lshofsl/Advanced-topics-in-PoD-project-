@@ -83,38 +83,48 @@ class EnergyNCA(nn.Module):
         s = x[:, :self.chn, ...]
         p = reduced_perception(s)                                
         beta = F.softplus(self.beta)
+        
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)          
+        
+        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)  
+        #Negative term
         e_quad = -0.5 * (p * p_W).sum(dim=1)
+        #Negative term
         e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)   
+        # Positive term
         diffusion = self.cohen_grossberg(s, beta).sum(dim=1)     
+        # E = -1/2 p(s)Wp(s)-hp(s) + \phi(s)
         return (e_quad + e_lin + diffusion).sum(dim=[1, 2])  
 
     def energy_gradient(self, x):
         s = x[:, :self.chn, ...]
-        p = reduced_perception(s) 
+
+        with torch.enable_grad():
+            s_ = s if s.requires_grad else s.detach().requires_grad_(True)
+        
+            # 2. Recompute perception graph on s_
+            p = reduced_perception(s_, self.sobel_x, self.lap)
+        
+            # 3. Transform perceived state
+            W_sym = self._get_constrained_W()
+            h_clamped = torch.clamp(self.h, -0.05, 0.05)
+            p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
+        
+            # 4. Compute VJP: J_p^T * p_transformed
+            # Output shape matches s_ ([B, 16, H, W])
+            vjp, = torch.autograd.grad(
+                outputs=p,
+                inputs=s_,
+                grad_outputs=p_transformed,
+                create_graph=create_graph,
+                retain_graph=True)
+
         beta = F.softplus(self.beta)
-
-        W_sym = self._get_constrained_W()
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
-
-        d_id = p_transformed[:, :self.chn]
-        d_sx = p_transformed[:, self.chn:2*self.chn]
-        d_sy = p_transformed[:, 2*self.chn:]
-
-        s_padded_dsx = F.pad(d_sx, [1, 1, 1, 1], mode="constant")
-        s_padded_dsy = F.pad(d_sy, [1, 1, 1, 1], mode="constant")
-
-        grad_coupling_bias = d_id \
-            - F.conv2d(s_padded_dsx, self.Kx, groups=self.chn) \
-            - F.conv2d(s_padded_dsy, self.Ky, groups=self.chn)
-
         fs = torch.tanh(beta * s)
         grad_diffusion = s * beta * (1 - fs**2)
 
-        total = grad_coupling_bias + grad_diffusion
+        total = grad_coupling_bias - grad_diffusion
         return torch.clamp(total, -1.0, 1.0)
 
     def get_alive_mask(self, x):
@@ -224,7 +234,7 @@ class HYBRID_NCA(torch.nn.Module):
         grad_perc = -y - vjp
         # 3. Cohen-Grossberg Barrier Gradient: d/ds [V_CG(s)] = s - tanh(beta * s)
         fs = torch.tanh(beta * s)
-        grad_diffusion = s - fs
+        grad_diffusion = s * beta * (1 - fs**2)
 
         # Exact Analytical Gradient dE/ds
         dE_ds = grad_coupling_bias + grad_perc + grad_diffusion
