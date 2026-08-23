@@ -126,9 +126,8 @@ class EnergyNCA(nn.Module):
         return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
      def energy_gradient(self, x, create_graph=False):
-        s = x[:, :self.chn, ...]
-
-        with torch.enable_grad():
+         s = x[:, :self.chn, ...]
+         with torch.enable_grad():
             s_ = s if s.requires_grad else s.detach().requires_grad_(True)
             filters = self.get_filters()
 
@@ -158,7 +157,7 @@ class EnergyNCA(nn.Module):
 
     def get_alive_mask(self, x):
         alpha = x[:, 3:4, :, :]
-        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="constant")
+        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
         return F.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def forward(self, x, update_rate=0.5):
@@ -172,10 +171,8 @@ class EnergyNCA(nn.Module):
 
         update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate)
 
-        # Out-of-place state update
         x_raw = x + correction * update_mask * pre_life_mask
 
-        # Out-of-place clamping
         rgba = torch.clamp(x_raw[:, :4, ...], 0.0, 1.0)
         hidden = torch.tanh(x_raw[:, 4:, ...])
         x_clamped = torch.cat([rgba, hidden], dim=1)
