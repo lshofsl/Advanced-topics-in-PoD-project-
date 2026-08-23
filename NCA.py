@@ -4,14 +4,28 @@ from sys import prefix
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-
 def perchannel_conv(x, filters):
+    """
+    Applies filters independently to each channel in x.
+    x: (B, C, H, W)
+    filters: (K, 1, 3, 3) where K is number of filter kernels (3)
+    Returns: (B, C * K, H, W)
+    """
     b, ch, h, w = x.shape
-    y = x.reshape(b * ch, 1, h, w)
-    y = torch.nn.functional.pad(y, [1, 1, 1, 1], 'circular')
-    y = torch.nn.functional.conv2d(y, filters[:, None])
-    return y.reshape(b, -1, h, w)
-
+    k = filters.shape[0]  # 3 kernels
+    
+    # 1. Expand filters to apply across ALL channels: (K * C, 1, 3, 3)
+    # This creates K filters for each of the C input channels
+    weight = filters.repeat(ch, 1, 1, 1)  
+    
+    # 2. Circular padding for periodic boundaries
+    x_padded = F.pad(x, [1, 1, 1, 1], mode='circular')
+    
+    # 3. Depthwise / Grouped Convolution (groups=ch)
+    # Output shape: (B, C * K, H, W)
+    out = F.conv2d(x_padded, weight, groups=ch)
+    
+    return out
 
 ident = torch.tensor([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float32, device="cuda:0")
 ones = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], dtype=torch.float32, device="cuda:0")
