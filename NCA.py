@@ -125,7 +125,7 @@ class EnergyNCA(nn.Module):
 
         return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
-    def energy_gradient(self, x, create_graph=False):
+     def energy_gradient(self, x, create_graph=False):
         s = x[:, :self.chn, ...]
 
         with torch.enable_grad():
@@ -139,6 +139,51 @@ class EnergyNCA(nn.Module):
             W_sym = self._get_constrained_W()
             h_clamped = torch.clamp(self.h, -0.05, 0.05)
             p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
+
+            # Compute VJP: J_p^T * p_transformed
+            grad_coupling_bias, = torch.autograd.grad(
+                outputs=p,
+                inputs=s_,
+                grad_outputs=p_transformed,
+                create_graph=create_graph,
+                retain_graph=True
+            )
+
+        beta = F.softplus(self.beta)
+        fs = torch.tanh(beta * s)
+        grad_diffusion = s * beta * (1 - fs**2)
+
+        total = grad_coupling_bias - grad_diffusion
+        return torch.clamp(total, -1.0, 1.0)
+
+    def get_alive_mask(self, x):
+        alpha = x[:, 3:4, :, :]
+        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="constant")
+        return F.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
+
+    def forward(self, x, update_rate=0.5):
+        pre_life_mask = self.get_alive_mask(x).float()
+        batch_n, _, h, w = x.shape
+        eta = F.softplus(self.log_eta)
+
+        # Direct Negative Energy Gradient Descent
+        grad_E = self.energy_gradient(x)
+        correction = eta * grad_E
+
+        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate)
+
+        # Out-of-place state update
+        x_raw = x + correction * update_mask * pre_life_mask
+
+        # Out-of-place clamping
+        rgba = torch.clamp(x_raw[:, :4, ...], 0.0, 1.0)
+        hidden = torch.tanh(x_raw[:, 4:, ...])
+        x_clamped = torch.cat([rgba, hidden], dim=1)
+
+        post_life_mask = self.get_alive_mask(x_clamped).float()
+        return x_clamped * post_life_mask
+
+
 
 
 class HYBRID_NCA(torch.nn.Module):
