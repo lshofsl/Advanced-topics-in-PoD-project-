@@ -245,9 +245,16 @@ class HYBRID_NCA(torch.nn.Module):
         #Negative term
         e_per = -(y * s).sum(dim=1)
         #Positive term
-        diffusion = self.cohen_grossberg_damping(s, beta).sum(dim=1)   
+        s_rgba = s[:, :4]
+        s_hidden = s[:, 4:]
+        beta_rgba = 0.5  
+        beta_hidden = 2.0 
+        damping_rgba = self.cohen_grossberg_damping(s_rgba, beta_rgba)   # [B, 4, H, W]
+        damping_hidden = self.cohen_grossberg_damping(s_hidden, beta_hidden) # [B, 12, H, W]
+        e_damping_channels = torch.cat([damping_rgba, damping_hidden], dim=1) # [B, 16, H, W]
+        e_damping = e_damping_channels.sum(dim=1)
         #All terms are calcualted with their respective signs 
-        return (e_quad + e_lin + diffusion + e_per).sum(dim=[1, 2])
+        return (e_quad + e_lin + e_damping + e_per).sum(dim=[1, 2])
 
     def energy_gradient(self, x):
         """Calculates exact dE/ds (Energy Gradient)."""
@@ -265,10 +272,16 @@ class HYBRID_NCA(torch.nn.Module):
         # 2. Perception Field Gradient: -y
         grad_perc = -y
 
-        #gamma = 0.1 
-        fs = torch.tanh(beta * s)
-        grad_damping =  s - fs
 
+        s_rgba = s[:, :4]
+        s_hidden = s[:, 4:]
+        beta_rgba = 0.5  
+        beta_hidden = 2.0 
+
+        damp_rgba = s_rgba - torch.tanh(beta_rgba * s_rgba)
+        damp_hidden = s_hidden - torch.tanh(beta_hidden * s_hidden)
+
+        grad_damping = torch.cat([damp_rgba, damp_hidden], dim=1)
         # Exact Analytical Gradient dE/ds
         dE_ds = grad_coupling_bias + grad_perc + grad_damping
     
