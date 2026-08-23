@@ -218,16 +218,22 @@ def vjp_reduced_perception(grad_p, chn, mask_n=0):
     
     # 1. Un-cat: grad_p was cat(x, obs)
     grad_x_direct = grad_p[:, :chn, ...]       # Direct path: derivative w.r.t x
-    grad_obs = grad_p[:, chn:, ...]            # Indirect path: derivative w.r.t obs
+    grad_obs = grad_p[:, chn:, ...]            # Indirect path: derivative w.r.t obs (48 channels)
     
-    # 2. Transposed depthwise conv with 180-degree spatially flipped kernels
+    # 2. Get standard non-flipped filters with shape (48, 1, 3, 3)
     filters = get_perception_filters(grad_p.device, grad_p.dtype)
-    filters_flipped = torch.flip(filters, dims=[2, 3])
-    filters_depthwise_flipped = filters_flipped.repeat(redu_chn, 1, 1, 1)
+    filters_depthwise = filters.repeat(redu_chn, 1, 1, 1)
     
-    grad_x_redu = F.conv2d(grad_obs, filters_depthwise_flipped, padding=1, groups=redu_chn)
+    # Transposed convolution acts as the exact adjoint (backward pass) for conv2d.
+    # Note: conv_transpose2d automatically handles spatial kernel transposition.
+    grad_x_redu = F.conv_transpose2d(
+        grad_obs, 
+        filters_depthwise, 
+        padding=1, 
+        groups=redu_chn
+    )
     
-    # 3. Accumulate gradients
+    # 3. Accumulate gradients back to s
     grad_s = grad_x_direct.clone()
     grad_s[:, :redu_chn, ...] += grad_x_redu
     
