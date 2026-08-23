@@ -189,159 +189,110 @@ class EnergyNCA(nn.Module):
         return x_clamped * post_life_mask
 
 
-def get_perception_filters(device, dtype):
-    """Creates normalized Sobel-X, Sobel-Y, and Laplacian 3x3 filters."""
-    sobel_x = torch.tensor([[-1., 0., 1.],
-                            [-2., 0., 2.],
-                            [-1., 0., 1.]], device=device, dtype=dtype) / 8.0
-    sobel_y = sobel_x.T
-    lap = torch.tensor([[1.,  4., 1.],
-                        [4., -20., 4.],
-                        [1.,  4., 1.]], device=device, dtype=dtype) / 12.0
-    return torch.stack([sobel_x, sobel_y, lap]).unsqueeze(1)
-
-def reduced_perception(x, mask_n=0):
-    chn = x.shape[1] - mask_n
-    x_redu = x[:, :chn, ...]
-    filters = get_perception_filters(x.device, x.dtype)
-    
-    filters_depthwise = filters.repeat(chn, 1, 1, 1)
-    obs = F.conv2d(x_redu, filters_depthwise, padding=1, groups=chn)
-    
-    return torch.cat((x, obs), dim=1)
-
-def vjp_reduced_perception(grad_p, chn, mask_n=0):
-    """Analytic VJP (transposed derivative) for reduced_perception."""
-    chn = int(chn.item()) if isinstance(chn, torch.Tensor) else int(chn)
-    mask_n = int(mask_n.item()) if isinstance(mask_n, torch.Tensor) else int(mask_n)
-    redu_chn = chn - mask_n
-    
-    # 1. Un-cat: grad_p was cat(x, obs)
-    grad_x_direct = grad_p[:, :chn, ...]       # Direct path: derivative w.r.t x
-    grad_obs = grad_p[:, chn:, ...]            # Indirect path: derivative w.r.t obs (48 channels)
-    
-    # 2. Get standard non-flipped filters with shape (48, 1, 3, 3)
-    filters = get_perception_filters(grad_p.device, grad_p.dtype)
-    filters_depthwise = filters.repeat(redu_chn, 1, 1, 1)
-    
-    # Transposed convolution acts as the exact adjoint (backward pass) for conv2d.
-    # Note: conv_transpose2d automatically handles spatial kernel transposition.
-    grad_x_redu = F.conv_transpose2d(
-        grad_obs, 
-        filters_depthwise, 
-        padding=1, 
-        groups=redu_chn
-    )
-    
-    # 3. Accumulate gradients back to s
-    grad_s = grad_x_direct.clone()
-    grad_s[:, :redu_chn, ...] += grad_x_redu
-    
-    return grad_s
-
 
 class HYBRID_NCA(torch.nn.Module):
     def __init__(self, chn=16, hidden_n=96):
         super().__init__()
         self.chn = chn
-        self.w1 = torch.nn.Conv2d(chn + 3 * chn, hidden_n, 1)
+        self.w1 = torch.nn.Conv2d(chn + 3 * (chn), hidden_n, 1)
         self.w2 = torch.nn.Conv2d(hidden_n, chn, 1, bias=False)
         self.w2.weight.data.zero_()
 
+
         self.v_dim = 4
         self.h_dim = chn - self.v_dim
-        self.W = nn.Parameter(torch.randn(chn, chn) * 0.01)
+        self.W = nn.Parameter(torch.randn(chn, chn) * 0.01)    # Now the matrix is state-state size and do not depend on the perception vector 
         self.eta = torch.nn.Parameter(torch.tensor(0.1))  
         self.beta = nn.Parameter(torch.tensor(0.01))
         self.h = nn.Parameter(torch.zeros(chn))
+        
 
     def cohen_grossberg_damping(self, s, beta):
         return 0.5 * torch.tanh(beta * s) ** 2
 
-    def get_alive_mask(self, x):
+    
+    def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
         padded_alpha = torch.nn.functional.pad(alpha, pad=[1, 1, 1, 1], mode="circular")
         return torch.nn.functional.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
 
     def _get_constrained_W(self):
         A = self.W
-        return 0.5 * (A + A.T)
+        W_sym = 0.5 * (A + A.T)
+        return W_sym
         
     def MLP(self, x): 
-        y = reduced_perception(x)
-        y = self.w2(F.relu(self.w1(y)))
+        y = reduced_perception(x) # compute spatial perception
+        y = self.w2(F.relu(self.w1(y))) # pass tensor y through layers
         return y
         
     def energy(self, x):
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)  
+        # The couping matrix remains symmetric always
         W_sym = self._get_constrained_W()
+        # We constraint the bias factor to not overgrowht the energy 
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
         y = self.MLP(s)
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
+        #Negative term
         e_quad = -0.5 * (s * s_W).sum(dim=1)
+        #Negative term
         e_lin = -(s * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
+        #Negative term
         e_per = -(y * s).sum(dim=1)
-        diffusion = self.cohen_grossberg_damping(s, beta).sum(dim=1) 
-        
+        #Positive term
+        diffusion = self.cohen_grossberg_damping(s, beta).sum(dim=1)   
+        #All terms are calcualted with their respective signs 
         return (e_quad + e_lin + diffusion + e_per).sum(dim=[1, 2])
 
-    def vjp_MLP(self, s, v):
-        p = reduced_perception(s)
-        h1 = self.w1(p)
-        a1 = F.relu(h1)
-
-        grad_a1 = F.conv2d(v, self.w2.weight.transpose(0, 1))
-        grad_h1 = grad_a1 * (h1 > 0).float()
-        grad_p = F.conv2d(grad_h1, self.w1.weight.transpose(0, 1))
-    
-        vjp_s = vjp_reduced_perception(grad_p, chn=int(self.chn))
-        return vjp_s
-
     def energy_gradient(self, x):
-        """Calculates exact dE/ds (Energy Gradient) manually."""
+        """Calculates exact dE/ds (Energy Gradient)."""
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
 
-        # 1. Coupling and Bias Gradient
+        y = self.MLP(x)
+
+        # 1. Coupling and Bias Gradient: -W_sym @ s - h
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
         grad_coupling_bias = -s_W - h_clamped.view(1, -1, 1, 1)
 
-        # 2. Perception Field Gradient (Manual VJP)
-        y = self.MLP(s)
-        vjp = self.vjp_MLP(s, v=s)
-        grad_perc = -y - vjp
+        # 2. Perception Field Gradient: -y
+        grad_perc = -y
 
-        # 3. Cohen-Grossberg Self-Inhibitory Damping Gradient: beta * (1 - tanh(beta * s)^2) * tanh(beta * s)
         fs = torch.tanh(beta * s)
         grad_damping = beta * (1.0 - fs**2) * fs
 
         # Exact Analytical Gradient dE/ds
         dE_ds = grad_coupling_bias + grad_perc + grad_damping
-
+    
         return torch.clamp(dE_ds, -1.0, 1.0)
+
 
     def forward(self, x, update_rate=0.5):
         pre_life_mask = self.get_alive_mask(x)
-        
-        energy_grad = self.energy_gradient(x)
-        
-        b, c, h, w = x[:, :self.chn, ...].shape
+        y = self.MLP(x)
+        b, c, h, w = y.shape
+        energy_grad =  self.energy_gradient(x)
         update_mask = (torch.rand(b, 1, h, w, device=x.device) < update_rate)
         
         eta = 0.05 * torch.sigmoid(self.eta)
-        dx = -eta * energy_grad * update_mask * pre_life_mask
+        #The update state now is completly guided by the energy_grad but for the 
+        #perception propery we add this state 
+        dx = -eta * energy_grad * update_mask * pre_life_mask #Differential state to be updated 
         x_update = x + dx 
 
+        # Bound hidden channels only, leave RGBA as-is
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, 4:, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
 
         post_life_mask = self.get_alive_mask(x_update)
-        return x_update * post_life_mask
+        x_final = x_update * post_life_mask
+        return x_final
 
 
 
