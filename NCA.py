@@ -44,11 +44,11 @@ def masked_perception(x, mask_n=0):
     return torch.cat((x,obs), dim = 1 )
 
 
-#def reduced_perception(x, mask_n=0):
- #   filters = torch.stack([sobel_x, sobel_x.T, lap])
-  #  x_redu = x[:,0:x.shape[1]-mask_n]
-   # obs = perchannel_conv(x_redu,filters)
-    #return torch.cat((x,obs), dim = 1 )
+def reduced_perception(x, mask_n=0):
+    filters = torch.stack([sobel_x, sobel_x.T, lap])
+    x_redu = x[:,0:x.shape[1]-mask_n]
+    obs = perchannel_conv(x_redu,filters)
+    return torch.cat((x,obs), dim = 1 )
     
 
 class EnergyNCA(nn.Module):
