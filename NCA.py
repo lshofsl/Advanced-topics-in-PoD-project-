@@ -44,31 +44,48 @@ def masked_perception(x, mask_n=0):
     return torch.cat((x,obs), dim = 1 )
 
 
-def reduced_perception(x, mask_n=0):
-    filters = torch.stack([sobel_x, sobel_x.T, lap])
-    x_redu = x[:,0:x.shape[1]-mask_n]
-    obs = perchannel_conv(x_redu,filters)
-    return torch.cat((x,obs), dim = 1 )
-    
+def reduced_perception(x, filters, mask_n=0):
+    """
+    Applies perchannel_conv using pass-through filters.
+    x: State tensor (B, C, H, W)
+    filters: Filter tensor stack (3, 1, 3, 3)
+    """
+    x_redu = x[:, 0 : x.shape[1] - mask_n]
+    obs = perchannel_conv(x_redu, filters)
+    return torch.cat((x, obs), dim=1)
+
 
 class EnergyNCA(nn.Module):
     def __init__(self, chn=16):
         super().__init__()
         self.chn = chn
-        self.perceive_dim = chn * 3  # 48 channels
-        
-        # 1. Local Interaction Matrix W (48 x 48)
+        self.perceive_dim = chn * 4  # 64 channels (Identity + 3 spatial derivatives)
+
+        # 1. Local Interaction Matrix W
         self.W = nn.Parameter(torch.randn(self.perceive_dim, self.perceive_dim) * 0.01)
         self.beta = nn.Parameter(torch.tensor(0.01))
-        
-        # 2. Linear Field / Bias h (48,) - Drives spontaneous boundary growth
+
+        # 2. Linear Field / Bias h
         self.h = nn.Parameter(torch.zeros(self.perceive_dim))
-        # Pre-bias Alpha identity channel so life naturally wants to expand from neighbors
         with torch.no_grad():
-            self.h[3] = 0.5 #strong alpha initialization 
-        
+            self.h[3] = 0.5  # Strong alpha initialization
 
         self.log_eta = nn.Parameter(torch.tensor(-3.8))
+
+        # 3. Spatial Filter Buffers
+        sobel_x = torch.tensor([[-1.0, 0.0, 1.0],
+                                [-2.0, 0.0, 2.0],
+                                [-1.0, 0.0, 1.0]], dtype=torch.float32)
+        lap = torch.tensor([[1.0, 2.0, 1.0],
+                            [2.0, -12.0, 2.0],
+                            [1.0, 2.0, 1.0]], dtype=torch.float32)
+
+        self.register_buffer("sobel_x", sobel_x.view(1, 1, 3, 3))
+        self.register_buffer("lap", lap.view(1, 1, 3, 3))
+
+    def get_filters(self):
+        sobel_y = self.sobel_x.transpose(-1, -2)
+        return torch.cat([self.sobel_x, sobel_y, self.lap], dim=0)
 
     def cohen_grossberg(self, s, beta):
         fs = torch.tanh(beta * s)
@@ -76,85 +93,38 @@ class EnergyNCA(nn.Module):
 
     def _get_constrained_W(self):
         A = self.W
-        W_sym = 0.5 * (A + A.T)
-        return W_sym
-        
+        return 0.5 * (A + A.T)
+
     def energy(self, x):
         s = x[:, :self.chn, ...]
-        p = reduced_perception(s)                                
+        filters = self.get_filters()
+        p = reduced_perception(s, filters)
         beta = F.softplus(self.beta)
-        
+
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
-        
-        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)  
-        #Negative term
-        e_quad = -0.5 * (p * p_W).sum(dim=1)
-        #Negative term
-        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)   
-        # Positive term
-        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)     
-        # E = -1/2 p(s)Wp(s)-hp(s) + \phi(s)
-        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])  
 
-    def energy_gradient(self, x):
+        p_W = torch.einsum('ij,bjhw->bihw', W_sym, p)
+        e_quad = -0.5 * (p * p_W).sum(dim=1)
+        e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
+        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)
+
+        return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
+
+    def energy_gradient(self, x, create_graph=False):
         s = x[:, :self.chn, ...]
 
         with torch.enable_grad():
             s_ = s if s.requires_grad else s.detach().requires_grad_(True)
-        
-            # 2. Recompute perception graph on s_
-            p = reduced_perception(s_, self.sobel_x, self.lap)
-        
-            # 3. Transform perceived state
+            filters = self.get_filters()
+
+            # Recompute perception features on s_
+            p = reduced_perception(s_, filters)
+
+            # Transform perceived state
             W_sym = self._get_constrained_W()
             h_clamped = torch.clamp(self.h, -0.05, 0.05)
             p_transformed = torch.einsum('ij,bjhw->bihw', W_sym, p) + h_clamped.view(1, -1, 1, 1)
-        
-            # 4. Compute VJP: J_p^T * p_transformed
-            # Output shape matches s_ ([B, 16, H, W])
-            vjp, = torch.autograd.grad(
-                outputs=p,
-                inputs=s_,
-                grad_outputs=p_transformed,
-                create_graph=create_graph,
-                retain_graph=True)
-
-        beta = F.softplus(self.beta)
-        fs = torch.tanh(beta * s)
-        grad_diffusion = s * beta * (1 - fs**2)
-
-        total = grad_coupling_bias - grad_diffusion
-        return torch.clamp(total, -1.0, 1.0)
-
-    def get_alive_mask(self, x):
-        alpha = x[:, 3:4, :, :]
-        padded_alpha = F.pad(alpha, pad=[1, 1, 1, 1], mode="constant")
-        return F.max_pool2d(padded_alpha, 3, stride=1, padding=0) > 0.1
-
-    def forward(self, x, update_rate=0.5):
-        pre_life_mask = self.get_alive_mask(x).float()
-        batch_n, _, h, w = x.shape
-        eta = F.softplus(self.log_eta)
-        
-        # Direct Negative Energy Gradient Descent
-        grad_E = self.energy_gradient(x)
-        correction = eta * grad_E
-
-        update_mask = (torch.rand(batch_n, 1, h, w, device=x.device) < update_rate)
-        
-        # Out-of-place state update
-        x_raw = x + correction * update_mask * pre_life_mask
-        
-        # Out-of-place clamping to prevent exploding gradients
-        rgba = torch.clamp(x_raw[:, :4, ...], 0.0, 1.0)
-        hidden = torch.tanh(x_raw[:, 4:, ...])
-        x_clamped = torch.cat([rgba, hidden], dim=1)
-
-        post_life_mask = self.get_alive_mask(x_clamped).float()
-        return x_clamped * post_life_mask
-
-
 
 
 class HYBRID_NCA(torch.nn.Module):
