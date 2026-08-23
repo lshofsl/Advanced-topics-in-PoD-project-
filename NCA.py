@@ -208,8 +208,10 @@ class HYBRID_NCA(torch.nn.Module):
         
 
     def cohen_grossberg_damping(self, s, beta):
-        return 0.5 * torch.tanh(beta * s) ** 2
-
+        z = beta * s
+        abs_z = torch.abs(z)
+        log_cosh = abs_z + torch.log1p(torch.exp(-2.0 * abs_z)) - 0.69314718
+        return 0.5 * (s ** 2) - (1.0 / beta) * log_cosh
     
     def get_alive_mask(self,x):
         alpha = x[:, 3:4, :, :] 
@@ -263,8 +265,9 @@ class HYBRID_NCA(torch.nn.Module):
         # 2. Perception Field Gradient: -y
         grad_perc = -y
 
+        #gamma = 0.1 
         fs = torch.tanh(beta * s)
-        grad_damping = beta * (1.0 - fs**2) * fs
+        grad_damping =  s - fs
 
         # Exact Analytical Gradient dE/ds
         dE_ds = grad_coupling_bias + grad_perc + grad_damping
@@ -285,7 +288,7 @@ class HYBRID_NCA(torch.nn.Module):
         dx = -eta * energy_grad * update_mask * pre_life_mask #Differential state to be updated 
         x_update = x + dx 
 
-        # Bound hidden channels only, leave RGBA as-is
+    
         v_part = x_update[:, :self.v_dim, ...]
         h_part = torch.tanh(x_update[:, 4:, ...])
         x_update = torch.cat([v_part, h_part], dim=1)
