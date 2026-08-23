@@ -247,7 +247,7 @@ class HYBRID_NCA(torch.nn.Module):
         #Positive term
         s_rgba = s[:, :4]
         s_hidden = s[:, 4:]
-        beta_rgba = 0.1  
+        beta_rgba = 0.2  
         beta_hidden = 2.0 
         damping_rgba = self.cohen_grossberg_damping(s_rgba, beta_rgba)   # [B, 4, H, W]
         damping_hidden = self.cohen_grossberg_damping(s_hidden, beta_hidden) # [B, 12, H, W]
@@ -275,7 +275,7 @@ class HYBRID_NCA(torch.nn.Module):
 
         s_rgba = s[:, :4]
         s_hidden = s[:, 4:]
-        beta_rgba = 0.1  
+        beta_rgba = 0.2  
         beta_hidden = 2.0 
 
         damp_rgba = s_rgba - torch.tanh(beta_rgba * s_rgba)
