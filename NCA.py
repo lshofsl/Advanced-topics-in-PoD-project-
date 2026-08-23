@@ -91,9 +91,8 @@ class EnergyNCA(nn.Module):
 
         self.log_eta = nn.Parameter(torch.tensor(-3.8))
 
-    def cohen_grossberg(self, s, beta):
-        fs = torch.tanh(beta * s)
-        return s * fs - s + (1.0 / beta) * torch.log(1.0 + fs)
+    def cohen_grossberg_damping(self, s, beta):
+        return 0.5 * torch.tanh(beta * s) ** 2
 
     def perceive(self, s):
         s_padded = F.pad(s, [1, 1, 1, 1], mode="constant")
@@ -119,7 +118,7 @@ class EnergyNCA(nn.Module):
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
         e_lin = -(p * h_clamped.view(1, -1, 1, 1)).sum(dim=1)
 
-        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)
+        diffusion = self.cohen_grossberg_damping(s, beta).sum(dim=1) 
 
         return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
@@ -155,10 +154,9 @@ class EnergyNCA(nn.Module):
         )
 
         fs = torch.tanh(beta * s)
-        d_ediff_ds = beta * s * (1.0 - fs**2)
-        grad_diffusion = -d_ediff_ds
+        grad_damping = beta * (1.0 - fs**2) * fs
 
-        total = grad_coupling_bias + grad_diffusion
+        total = grad_coupling_bias + grad_damping
         return torch.clamp(total, -1.0, 1.0)
 
     def get_alive_mask(self, x):
@@ -189,10 +187,6 @@ class EnergyNCA(nn.Module):
 
         post_life_mask = self.get_alive_mask(x_clamped).float()
         return x_clamped * post_life_mask
-
-
-
-
 
 
 
@@ -263,9 +257,8 @@ class HYBRID_NCA(torch.nn.Module):
         self.h = nn.Parameter(torch.zeros(chn))
         
 
-    def cohen_grossberg(self, s, beta):
-        fs = torch.tanh(beta * s)
-        return s * fs - s + (1.0 / beta) * torch.log(1.0 + fs)
+    def cohen_grossberg_damping(self, s, beta):
+        return 0.5 * torch.tanh(beta * s) ** 2
 
     
     def get_alive_mask(self,x):
@@ -300,7 +293,7 @@ class HYBRID_NCA(torch.nn.Module):
         #Negative term
         e_per = -(y * s).sum(dim=1)
         #Positive term
-        diffusion = self.cohen_grossberg(s, beta).sum(dim=1)   
+        diffusion = self.cohen_grossberg_damping(s, beta).sum(dim=1) 
         #All terms are calcualted with their respective signs 
         return (e_quad + e_lin + diffusion + e_per).sum(dim=[1, 2])
 
@@ -333,7 +326,7 @@ class HYBRID_NCA(torch.nn.Module):
 
         # Backprop through reduced_perception
         # (Assuming reduced_perception applies fixed spatial filters like Sobel/Laplacian)
-        vjp_s = vjp_reduced_perception(grad_p)
+        vjp_s = vjp_reduced_perception(grad_p, s)
 
         return vjp_s
 
@@ -359,10 +352,10 @@ class HYBRID_NCA(torch.nn.Module):
 
         # 3. Cohen-Grossberg Barrier Gradient: s * beta * (1 - tanh(beta * s)^2)
         fs = torch.tanh(beta * s)
-        grad_diffusion = s * beta * (1.0 - fs**2)
+        grad_damping = beta * (1.0 - fs**2) * fs
 
         # Exact Analytical Gradient dE/ds
-        dE_ds = grad_coupling_bias + grad_perc - grad_diffusion
+        dE_ds = grad_coupling_bias + grad_perc + grad_damping
 
         return torch.clamp(dE_ds, -1.0, 1.0)
 
