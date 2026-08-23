@@ -125,9 +125,10 @@ class EnergyNCA(nn.Module):
 
         return (e_quad + e_lin + diffusion).sum(dim=[1, 2])
 
-     def energy_gradient(self, x, create_graph=False):
-         s = x[:, :self.chn, ...]
-         with torch.enable_grad():
+    def energy_gradient(self, x, create_graph=False):
+        s = x[:, :self.chn, ...]
+
+        with torch.enable_grad():
             s_ = s if s.requires_grad else s.detach().requires_grad_(True)
             filters = self.get_filters()
 
