@@ -4,27 +4,30 @@ from sys import prefix
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
+
 def perchannel_conv(x, filters):
     """
-    Applies filters independently to each channel in x.
     x: (B, C, H, W)
-    filters: (K, 1, 3, 3) where K is number of filter kernels (3)
-    Returns: (B, C * K, H, W)
+    filters: (K, 1, 3, 3) where K=3 (Sobel_X, Sobel_Y, Laplace)
     """
     b, ch, h, w = x.shape
-    k = filters.shape[0]  # 3 kernels
     
-    # 1. Expand filters to apply across ALL channels: (K * C, 1, 3, 3)
-    # This creates K filters for each of the C input channels
-    weight = filters.repeat(ch, 1, 1, 1)  
+    # Force filters to (K, 1, 3, 3) if they lost a dimension
+    if filters.ndim == 3:
+        filters = filters.unsqueeze(1)
+    elif filters.shape[1] != 1:
+        filters = filters.view(-1, 1, 3, 3)
+
+    k = filters.shape[0]  # k = 3
     
-    # 2. Circular padding for periodic boundaries
+    # Repeat filters for each input channel: (ch * k, 1, 3, 3)
+    weight = filters.repeat(ch, 1, 1, 1)
+    
+    # Circular padding
     x_padded = F.pad(x, [1, 1, 1, 1], mode='circular')
     
-    # 3. Depthwise / Grouped Convolution (groups=ch)
-    # Output shape: (B, C * K, H, W)
+    # Grouped convolution across channels
     out = F.conv2d(x_padded, weight, groups=ch)
-    
     return out
 
 ident = torch.tensor([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float32, device="cuda:0")
@@ -98,8 +101,12 @@ class EnergyNCA(nn.Module):
         self.register_buffer("lap", lap.view(1, 1, 3, 3))
 
     def get_filters(self):
-        sobel_y = self.sobel_x.transpose(-1, -2)
-        return torch.cat([self.sobel_x, sobel_y, self.lap], dim=0)
+        # Ensure sobel_y keeps shape (1, 1, 3, 3)
+        sobel_y = self.sobel_x.transpose(-1, -2) 
+    
+        # Concatenate along dim=0 -> Shape: (3, 1, 3, 3)
+        filters = torch.cat([self.sobel_x, sobel_y, self.lap], dim=0) 
+        return filters
 
     def cohen_grossberg(self, s, beta):
         fs = torch.tanh(beta * s)
