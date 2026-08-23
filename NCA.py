@@ -234,7 +234,7 @@ class HYBRID_NCA(torch.nn.Module):
         # The couping matrix remains symmetric always
         W_sym = self._get_constrained_W()
         # We constraint the bias factor to not overgrowht the energy 
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)
+        h_clamped = torch.clamp(self.h, -0.1, 0.1)
         y = self.MLP(s)
 
         s_W = torch.einsum('ij,bjhw->bihw', W_sym, s)
@@ -247,7 +247,7 @@ class HYBRID_NCA(torch.nn.Module):
         #Positive term
         s_rgba = s[:, :4]
         s_hidden = s[:, 4:]
-        beta_rgba = 0.2  
+        beta_rgba = 0.1  
         beta_hidden = 2.0 
         damping_rgba = self.cohen_grossberg_damping(s_rgba, beta_rgba)   # [B, 4, H, W]
         damping_hidden = self.cohen_grossberg_damping(s_hidden, beta_hidden) # [B, 12, H, W]
@@ -261,7 +261,7 @@ class HYBRID_NCA(torch.nn.Module):
         s = x[:, :self.chn, ...]
         beta = F.softplus(self.beta)
         W_sym = self._get_constrained_W()
-        h_clamped = torch.clamp(self.h, -0.05, 0.05)
+        h_clamped = torch.clamp(self.h, -0.1, 0.1)
 
         y = self.MLP(x)
 
@@ -275,7 +275,7 @@ class HYBRID_NCA(torch.nn.Module):
 
         s_rgba = s[:, :4]
         s_hidden = s[:, 4:]
-        beta_rgba = 0.2  
+        beta_rgba = 0.1  
         beta_hidden = 2.0 
 
         damp_rgba = s_rgba - torch.tanh(beta_rgba * s_rgba)
