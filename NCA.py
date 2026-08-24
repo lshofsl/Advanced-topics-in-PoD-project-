@@ -92,7 +92,10 @@ class EnergyNCA(nn.Module):
         self.log_eta = nn.Parameter(torch.tensor(-3.8))
 
     def cohen_grossberg_damping(self, s, beta):
-        return 0.5 * torch.tanh(beta * s) ** 2
+        z = beta * s
+        abs_z = torch.abs(z)
+        log_cosh = abs_z + torch.log1p(torch.exp(-2.0 * abs_z)) - 0.69314718
+        return 0.5 * (s ** 2) - (1.0 / beta) * log_cosh
 
     def perceive(self, s):
         s_padded = F.pad(s, [1, 1, 1, 1], mode="constant")
