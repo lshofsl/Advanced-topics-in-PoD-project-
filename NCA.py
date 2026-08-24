@@ -278,8 +278,8 @@ class HYBRID_NCA(torch.nn.Module):
 
         s_rgba = s[:, :4]
         s_hidden = s[:, 4:]
-        beta_rgba = 1.0  
-        beta_hidden = 1.0 
+        beta_rgba = 1.5  
+        beta_hidden = 2.0 
 
         damp_rgba = s_rgba - torch.tanh(beta_rgba * s_rgba)
         damp_hidden = s_hidden - torch.tanh(beta_hidden * s_hidden)
