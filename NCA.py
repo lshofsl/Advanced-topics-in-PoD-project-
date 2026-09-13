@@ -257,7 +257,7 @@ class HYBRID_NCA(torch.nn.Module):
         e_damping_channels = torch.cat([damping_rgba, damping_hidden], dim=1) # [B, 16, H, W]
         e_damping = e_damping_channels.sum(dim=1)
         #All terms are calcualted with their respective signs 
-        return (e_quad + e_lin + e_damping ).sum(dim=[1, 2])  ##+ e_per
+        return (e_quad + e_lin + e_damping + e_per ).sum(dim=[1, 2])  ##
 
     def energy_gradient(self, x):
         """Calculates exact dE/ds (Energy Gradient)."""
@@ -273,7 +273,7 @@ class HYBRID_NCA(torch.nn.Module):
         grad_coupling_bias = -s_W - h_clamped.view(1, -1, 1, 1)
 
         # 2. Perception Field Gradient: -y
-        #grad_perc = -y
+        grad_perc = -y
 
 
         s_rgba = s[:, :4]
@@ -286,7 +286,7 @@ class HYBRID_NCA(torch.nn.Module):
 
         grad_damping = torch.cat([damp_rgba, damp_hidden], dim=1)
         # Exact Analytical Gradient dE/ds
-        dE_ds = grad_coupling_bias + grad_damping # + grad_perc
+        dE_ds = grad_coupling_bias + grad_damping + grad_perc
     
         return torch.clamp(dE_ds, -1.0, 1.0)
 
