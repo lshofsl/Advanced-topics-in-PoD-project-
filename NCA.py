@@ -113,7 +113,7 @@ class EnergyNCA(nn.Module):
     def energy(self, x):
         s = x[:, : self.chn, ...]
         p = self.perceive(s)
-        beta = F.softplus(self.beta)
+        beta = 2.0
         W_sym = self._get_constrained_W()
 
         p_W = torch.einsum("ij,bjhw->bihw", W_sym, p)
@@ -128,7 +128,7 @@ class EnergyNCA(nn.Module):
     def energy_gradient(self, x):
         s = x[:, : self.chn, ...]
         p = self.perceive(s)
-        beta = F.softplus(self.beta)
+        beta = 2.0
 
         W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
