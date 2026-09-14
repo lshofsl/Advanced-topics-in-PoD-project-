@@ -110,23 +110,12 @@ class EnergyNCA(nn.Module):
         W_sym = -0.5 * (A + A.T)
         return W_sym
 
-    def _get_competitive_W(self):
-        A = self.W                          # free, learnable
-        A_sym = 0.5 * (A + A.T)             # symmetric, as before
-        n = A.shape[0]
-        diag_mask = torch.eye(n, device=A.device)
-        off_diag_mask = 1.0 - diag_mask
-    
-        W_off = -A_sym.pow(2) * off_diag_mask   # always <= 0, smooth, reaches exact 0
-        W_diag = A_sym * diag_mask               # left free -- self-inhibition, unconstrained sign
-    
-        return W_off + W_diag
 
     def energy(self, x):
         s = x[:, : self.chn, ...]
         p = self.perceive(s)
         beta = self.beta
-        W_sym = self._get_competitive_W()
+        W_sym = self._get_constrained_W()
 
         p_W = torch.einsum("ij,bjhw->bihw", W_sym, p)
         e_quad = -0.5 * (p * p_W).sum(dim=1)
@@ -142,7 +131,7 @@ class EnergyNCA(nn.Module):
         p = self.perceive(s)
         beta = self.beta
 
-        W_sym = self._get_competitive_W()
+        W_sym = self._get_constrained_W()
         h_clamped = torch.clamp(self.h, -0.05, 0.05)
         p_transformed = torch.einsum(
             "ij,bjhw->bihw", W_sym, p
